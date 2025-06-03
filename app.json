@@ -18,7 +18,7 @@
       "url": "heroku/nodejs"
     },
     {
-      "url": "https://github.com/paketo-buildpacks/git"
+      "url": "https://github.com/heroku/heroku-buildpack-apt"
     }
   ],
   "env": {
