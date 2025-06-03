@@ -1,0 +1,50 @@
+{
+  "name": "raganork-md",
+  "description": "A bot setup for raganork-md with FFmpeg, PostgreSQL, and Git support",
+  "repository": "https://github.com/ultar1/raganork-md",
+  "logo": "https://your-logo-link",
+  "keywords": ["whatsapp", "bot", "heroku", "automation", "ffmpeg", "git"],
+  "addons": [
+    {
+      "plan": "heroku-postgresql",
+      "as": "DATABASE"
+    }
+  ],
+  "buildpacks": [
+    {
+      "url": "https://github.com/heroku/heroku-buildpack-ffmpeg.git"
+    },
+    {
+      "url": "heroku/nodejs"
+    },
+    {
+      "url": "https://github.com/heroku/heroku-buildpack-git.git"
+    }
+  ],
+  "env": {
+    "SESSION": {
+      "description": "Session string for the bot",
+      "required": true
+    },
+    "BOT_NAME": {
+      "description": "Name of the bot",
+      "required": true
+    },
+    "HANDLERS": {
+      "description": "Command handlers for the bot",
+      "required": true
+    },
+    "SUDO": {
+      "description": "Sudo user ID",
+      "required": true
+    },
+    "LANGUAGE": {
+      "description": "Language setting for the bot",
+      "required": true
+    },
+    "TZ": {
+      "description": "Timezone setting",
+      "required": true
+    }
+  }
+}
