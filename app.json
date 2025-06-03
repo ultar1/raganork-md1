@@ -12,7 +12,7 @@
   ],
   "buildpacks": [
     {
-      "url": "https://github.com/heroku/heroku-buildpack-ffmpeg.git"
+      "url": "https://github.com/HasibulKabir/heroku-buildpack-ffmpeg-ffprobe.git"
     },
     {
       "url": "heroku/nodejs"
