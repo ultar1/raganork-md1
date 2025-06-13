@@ -1,0 +1,27 @@
+{
+  "name": "Raganork-md",
+  "stack": "container",
+  "env": {
+    "SESSION_ID": {
+      "description": "Unique session identifier",
+      "required": true
+    },
+    "AUTO_READ_STATUS": {
+      "description": "Enable or disable auto-read",
+      "required": true
+    },
+    "ALWAYS_ONLINE": {
+      "description": "Keep the app always online",
+      "required": true
+    }
+  },
+  "addons": [
+    "heroku-postgresql"
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  }
+}
