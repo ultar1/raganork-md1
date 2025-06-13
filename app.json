@@ -7,7 +7,8 @@
       "required": true
     },
     "AUTO_READ_STATUS": {
-      "description": "Enable or disable "required": false
+      "description": "Enable or disable"
+      "required": false
     },
     "ALWAYS_ONLINE": {
       "description": "Keep the app always online",
