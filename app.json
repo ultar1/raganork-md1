@@ -8,11 +8,11 @@
     },
     "AUTO_READ_STATUS": {
       "description": "Enable or disable auto-read",
-      "required": true
+      "required": false
     },
     "ALWAYS_ONLINE": {
       "description": "Keep the app always online",
-      "required": true
+      "required": false
     }
   },
   "addons": [
