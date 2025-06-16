@@ -31,8 +31,8 @@ RUN npm install -g --force yarn pm2
 # Install bot dependencies
 RUN yarn install
 
-# Install Puppeteer without Chromium (it will use system-installed Chromium)
-RUN yarn add puppeteer
+# Install lyrics-finder package
+RUN yarn add lyrics-finder
 
 # Set Puppeteer to use system-installed Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
