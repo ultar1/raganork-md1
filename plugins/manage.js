@@ -190,8 +190,11 @@ Module({
     if (target == "chat" || target == "sudo") {
         await setVar("ANTI_DELETE", match[1]);
         return await message.sendReply(`_Anti-delete activated ✅_\n\n_Recovered messages will be sent to the ${target == "chat"? "original chat": "first sudo"}_`);
+    } else if (target == "off") {
+        await setVar("ANTI_DELETE", "off");
+        return await message.sendReply(`_Anti-delete deactivated ❌_`);
     } else {
-        return await message.sendReply(`_*Anti delete*_\n\n_Recovers deleted messages and sends automatically_\n\n_Current status: ${config.ANTI_DELETE || "off"}_\n\n_Use \`.antidelete chat|sudo\`_\n\n- "chat" - sends to original chat\n- "sudo" - sends to first sudo_`);
+        return await message.sendReply(`_*Anti delete*_\n\n_Recovers deleted messages and sends automatically_\n\n_Current status: ${config.ANTI_DELETE || "off"}_\n\n_Use \`.antidelete chat|sudo|off\`_\n\n- "chat" - sends to original chat\n- "sudo" - sends to first sudo\n- "off" - disables anti-delete_`);
     }
 });
 
@@ -239,7 +242,7 @@ Module({
     desc: "Deletes sudo"
 }, async (m, mm) => {
     const oldSudo = config.SUDO?.split(",");
-    var newSudo = (m.reply_message ? m.reply_message.jid : '' || m.mention[0] || mm[1]).split("@")[0];
+    var newSudo = (m.reply_message ? m.reply_message.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
     if (!newSudo) return await m.sendReply("*Need reply/mention/number*");
     if (oldSudo.includes(newSudo)) {
         oldSudo.push(newSudo);
@@ -628,7 +631,6 @@ Module({
     var uptime_process = (`_Process : ${hours} Hour(s), ${minutes} minute(s) and ${seconds} second(s)_`);
     return await message.sendReply(`                 _*[ UP-TIME ]*_\n\n${uptime_os}\n${uptime_process}`);
 }));
-if (config.DEBUG) { 
 Module({
     on: 'text',
     fromMe: !0
@@ -646,7 +648,6 @@ Module({
         }
     }
 });
-}
 module.exports = {
     containsDisallowedWords,
     setVar

@@ -13,6 +13,7 @@ const {
 const aiTTS = require('./utils/aiTTS');
 const config = require('../config');
 const axios = require('axios');
+const fileType = require('file-type');
 let MODE = config.MODE,
     STICKER_DATA = config.STICKER_DATA;
 const {
@@ -100,12 +101,12 @@ Module({
         });
 }));
 Module({
-    pattern: 'speed ?(.*)',
+    pattern: 'sped ?(.*)',
     fromMe: w,
     use: 'edit',
     desc: "Speeds up music & increases pitch. For making sped-up+reverb audios"
 }, (async (message, match) => {
-    if (message.reply_message === false) return await message.sendReply(Lang.MP3_NEED_REPLY)
+    if (!message.reply_message) return await message.sendReply(Lang.MP3_NEED_REPLY)
     var {
         seconds
     } = message.quoted.message[Object.keys(message.quoted.message)[0]];
@@ -245,4 +246,141 @@ Module({
     }, {
         quoted: message.data
     });
+});
+Module({
+    pattern: 'doc ?(.*)',
+    fromMe: w,
+    use: 'edit',
+    desc: "Converts replied media to document format"
+}, async (message, match) => {
+    if (message.reply_message === false) return await message.send("_Reply to a media file (image, video, audio, sticker, or document)_");
+    
+    if (!message.reply_message.image && !message.reply_message.video && !message.reply_message.audio && !message.reply_message.sticker && !message.reply_message.document) {
+        return await message.send("_Reply to a media file (image, video, audio, sticker, or document)_");
+    }
+    
+    try {
+        const mediaMessage = message.reply_message.data.message;
+        const mediaType = Object.keys(mediaMessage)[0];
+        const mediaInfo = mediaMessage[mediaType];
+        
+        if (mediaInfo.fileLength && mediaInfo.fileLength > 50 * 1024 * 1024) {
+            return await message.send("_File too large! Maximum size is 50MB_");
+        }        const processingMsg = await message.send("_Converting to document..._");
+        
+        const filePath = await message.reply_message.download();
+        const stream = fs.createReadStream(filePath);
+        var randomHash = Math.random().toString(36).substring(2, 8);
+        var fileName = match[1];
+        var mimetype = mediaInfo.mimetype || 'application/octet-stream';
+        
+        if (message.reply_message.document && mediaInfo.fileName && !match[1]) {
+            fileName = mediaInfo.fileName;
+        } else if (!fileName) {
+            fileName = `converted_file_${randomHash}`;
+        }
+        
+        if (!fileName.includes('.') && mimetype) {
+            const ext = mimetype.split('/')[1];
+            if (ext && ext !== 'octet-stream') {
+                fileName += `.${ext}`;
+            }
+        }
+          await message.client.sendMessage(message.jid, {
+            document: { stream: stream },
+            fileName: fileName,
+            mimetype: mimetype,
+            caption: match[1] ? '' : '_Converted to document_'
+        }, {
+            quoted: message.quoted
+        });
+        
+        try {
+            fs.unlinkSync(filePath);
+        } catch (e) {
+            console.log('Failed to delete temp file:', filePath);
+        }
+        
+        await message.client.sendMessage(message.jid, {
+            delete: processingMsg.key
+        });
+        
+    } catch (error) {
+        console.error('Doc conversion error:', error);
+        if (error.message.includes('download')) {
+            await message.send("_Failed to download media. File might be corrupted or expired_");
+        } else if (error.message.includes('large') || error.message.includes('memory')) {
+            await message.send("_File too large to process_");
+        } else {
+            await message.send("_Failed to convert media to document_");
+        }
+    }
+});
+Module({
+    pattern: 'upload ?(.*)',
+    fromMe: w,
+    use: 'utility',
+    desc: "Downloads file from URL and sends as document"
+}, async (message, match) => {    var url = match[1] || (message.reply_message ? message.reply_message.text : '');
+    
+    const urlMatch = url.match(/https?:\/\/[^\s]+/);
+    if (urlMatch) {
+        url = urlMatch[0];
+    }
+    
+    if (!url || !url.startsWith('http')) {
+        return await message.send("_Please provide a valid URL or reply to a message containing a URL_");
+    }
+    
+    try {        await message.send("_Downloading file..._");
+        
+        const response = await axios.get(url, {
+            responseType: 'stream',
+            timeout: 60000,
+        });
+        
+        var randomHash = Math.random().toString(36).substring(2, 8);        
+        var fileName = `downloaded_file_${randomHash}`;
+        var mimetype = response.headers['content-type'] || 'application/octet-stream';
+        
+        const contentDisposition = response.headers['content-disposition'];
+        if (contentDisposition && contentDisposition.includes('filename=')) {
+            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+            if (filenameMatch) {
+                fileName = filenameMatch[1].replace(/['"]/g, '');
+            }
+        } else {
+            const urlPath = new URL(url).pathname;
+            const urlFileName = urlPath.split('/').pop();
+            if (urlFileName && urlFileName.includes('.')) {
+                fileName = urlFileName;
+            }
+        }
+        
+        if (!fileName.includes('.') && response.headers['content-type']) {
+            const ext = response.headers['content-type'].split('/')[1];
+            if (ext && ext !== 'octet-stream') {
+                fileName += `.${ext}`;
+            }
+        }        await message.client.sendMessage(message.jid, {
+            document: { stream: response.data },
+            fileName: fileName,
+            mimetype: mimetype,
+            caption: `_Downloaded from: ${url}_`
+        }, {
+            quoted: message.quoted
+        });
+        
+    } catch (error) {
+        console.error('Upload error:', error);
+        if (error.code === 'ECONNABORTED') {
+            await message.send("_Download timeout. File might be too large or server is slow_");
+        } else if (error.response && error.response.status === 404) {
+            await message.send("_File not found (404). Please check the URL_");
+        } else if (error.response && error.response.status >= 400) {
+            await message.send(`_Download failed with status ${error.response.status}_`);
+        } else {
+            await message.send("_Failed to download file. Please check the URL and try again_");
+        }
+    }
 });
