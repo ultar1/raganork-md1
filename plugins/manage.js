@@ -204,10 +204,10 @@ Module({
     use: 'owner'
 }, async (message, mm) => {
     var m = message;
-    var newSudo = (m.reply_message ? m.reply_message.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
+    var newSudo = (m.reply_message ? m.reply_message?.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
     if (!newSudo) return await m.sendReply("_Need reply/mention/number_");
     const oldSudo = config.SUDO?.split(",");
-    var newSudo = (m.reply_message ? m.reply_message.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
+    var newSudo = (m.reply_message ? m.reply_message?.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
     if (!newSudo) return await m.sendReply("_Need reply/mention/number_");
     newSudo = newSudo.replace(/[^0-9]/g, '');
     if (!oldSudo.includes(newSudo)) {
@@ -242,7 +242,7 @@ Module({
     desc: "Deletes sudo"
 }, async (m, mm) => {
     const oldSudo = config.SUDO?.split(",");
-    var newSudo = (m.reply_message ? m.reply_message.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
+    var newSudo = (m.reply_message ? m.reply_message?.jid : '' || m.mention?.[0] || mm[1]).split("@")[0];
     if (!newSudo) return await m.sendReply("*Need reply/mention/number*");
     if (oldSudo.includes(newSudo)) {
         oldSudo.push(newSudo);
@@ -550,7 +550,7 @@ Module({
             let msg = `*${setting.title}*\n\n1. ON\n2. OFF`;
             return await message.sendReply(msg);
         }
-    } else if (message.message?.match(/^(1|2)$/) && message.reply_message?.text.includes("1. ON") && message.quoted.key.fromMe) {
+    } else if (message.message?.match(/^(1|2)$/) && message.reply_message?.text?.includes("1. ON") && message.quoted.key.fromMe) {
         const quotedMsg = message.reply_message.message;
         const option = parseInt(message.message);
         for (const setting of configs) {
