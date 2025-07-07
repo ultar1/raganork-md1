@@ -52,7 +52,7 @@ Module({
     pattern: "stickcmd ?(.*)",
     fromMe: true,
     desc: "Sticks commands on stickers. And if that sticker is sent, it will work as a command!",
-    usage: ".stickcmd kick",
+    usage: ".stickcmd .kick",
     warn: "Only works on stickers",
     use: 'utility'
 }, async (message, match) => {
@@ -275,7 +275,7 @@ Module({
     }
     if (message.action == 'promote' && apjids.includes(message.jid)) {
         if (message.from.split("@")[0] == message.myjid || sudos.includes(message.from.split("@")[0]) || message.participant[0].split("@")[0] == message.myjid || (await isSuperAdmin(message, message.from))) return;
-        var admin = await isAdmin(message);
+        var admin = await isAdmin(message, message.myjid);
         if (!admin) return;
         await message.client.groupParticipantsUpdate(message.jid, [message.from], "demote")
         return await message.client.groupParticipantsUpdate(message.jid, [message.participant[0]], "demote")
@@ -288,14 +288,14 @@ Module({
                 mentions: admin_jids
             });
         }
-        var admin = await isAdmin(message);
+        var admin = await isAdmin(message, message.myjid);
         if (!admin) return;
         await message.client.groupParticipantsUpdate(message.jid, [message.from], "demote")
         return await message.client.groupParticipantsUpdate(message.jid, [message.participant[0]], "promote")
     }    if (message.action === 'add' && jids.includes(message.jid)) {
         var allowed = ALLOWED.split(",");
         if (isFake(message.participant[0], allowed)) {
-            var admin = await isAdmin(message);
+            var admin = await isAdmin(message, message.myjid);
             if (!admin) return;
             return await message.client.groupParticipantsUpdate(message.jid, [message.participant[0]], "remove")
         }

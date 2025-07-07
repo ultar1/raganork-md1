@@ -4,6 +4,8 @@ const {
 const {
     isJid
 } = require('./utils/lid-helper');
+const { isAdmin } = require('./utils');
+const { ADMIN_ACCESS } = require('../config');
 Module({
     pattern: 'react ?(.*)',
     fromMe: true,
@@ -30,6 +32,38 @@ Module({
     if (t[1] && m.reply_message?.text && m.quoted.key.fromMe){
     await m.edit(t[1],m.jid,m.quoted.key);
 }
+}));
+Module({
+    pattern: 'send ?(.*)',
+    fromMe: true,
+    desc: 'Forwards replied message to the given jid',
+    use: 'whatsapp'
+}, (async (m, t) => {
+    if (!m.reply_message) return await m.sendReply('_Reply to a message_');
+    const query = t[1] || m.jid;
+    const jidMap = query.split(" ").filter(x => isJid(x));
+    if (!jidMap.length) {
+        return await m.sendReply('_No valid JID found in the query, use `send jid1 jid2 ...`_');
+    }
+    for (const jid of jidMap) {
+        await m.forwardMessage(jid, m.quoted, { contextInfo: { isForwarded: false } });
+    }
+}));
+Module({
+    pattern: 'forward ?(.*)',
+    fromMe: true,
+    desc: 'Forwards replied message to the given jid',
+    use: 'whatsapp'
+}, (async (m, t) => {
+    if (!m.reply_message) return await m.sendReply('_Reply to a message_');
+    const query = t[1] || m.jid;
+    const jidMap = query.split(" ").filter(x => isJid(x));
+    if (!jidMap.length) {
+        return await m.sendReply('_No valid JID found in the query, use `forward jid1 jid2 ...`_');
+    }
+    for (const jid of jidMap) {
+        await m.forwardMessage(jid, m.quoted, { contextInfo: { isForwarded: true, forwardingScore: 2 } });
+    }
 }));
 Module({
     pattern: 'retry ?(.*)',
@@ -66,6 +100,7 @@ Module({
     }
 
     const directType = quoted.imageMessage ? 'imageMessage' :
+                        quoted.audioMessage ? 'audioMessage' :
                         quoted.videoMessage ? 'videoMessage' : null;
 
     if (directType && quoted[directType]?.viewOnce) {
@@ -75,4 +110,19 @@ Module({
 
     await m.sendReply("_Not a view once msg!_");
 });
-
+Module({
+    pattern: 'del',
+    fromMe: false,
+    desc: 'Deletes message for everyone. Supports admin deletion'
+}, (async (m, t) => {
+    let adminAccesValidated = ADMIN_ACCESS ? await isAdmin(m,m.sender) : false;
+    if (!m.reply_message) return;
+    if (m.fromOwner || adminAccesValidated) {
+    m.jid = m.quoted.key.remoteJid
+    if (m.quoted.key.fromMe) return await m.client.sendMessage(m.jid, { delete: m.quoted.key })
+    if (!m.quoted.key.fromMe) {
+    var admin = await isAdmin(m);
+    if (!admin) return await m.sendReply("_I'm not an admin!_")
+    return await m.client.sendMessage(m.jid, { delete: m.quoted.key })
+    }
+}}));

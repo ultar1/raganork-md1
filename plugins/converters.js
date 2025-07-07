@@ -8,9 +8,10 @@ const {
     sticker,
     addExif,
     attp,
-    gtts
+    gtts,
+    gis,
+    aiTTS
 } = require('./utils');
-const aiTTS = require('./utils/aiTTS');
 const config = require('../config');
 const axios = require('axios');
 const fileType = require('file-type');
@@ -21,6 +22,48 @@ const {
 } = require('./utils/lang');
 const Lang = getString('converters');
 let w = MODE == 'public' ? false : true
+
+Module({
+    pattern: 'img ?(.*)',
+    fromMe: w,
+    use: 'search',
+    desc: 'Searches for an image on Google Images and sends the requested number of results.'
+}, (async (message, match) => {
+    if (!match[1]) return await message.send("*_Need a search term!_*");
+    let splitInput = match[1].split(',');
+    let count = parseInt(splitInput[1] || 5);
+    await message.send(`*_Searching for ${count} images..._*`);
+    
+    const buffer = Math.ceil(count * 0.5);
+    let results = await gis(splitInput[0], count + buffer);
+    if (results.length < 1) return await message.send("*_No results found!_*");
+    let successCount = 0;
+    let i = 0;
+    while (successCount < count && i < results.length) {
+        try {
+            await message.client.sendMessage(message.jid, {
+                image: {
+                    url: results[i]
+                }
+            });
+            successCount++;
+        } catch (e) {
+            console.log(`Failed to send image ${i+1}:`, e);
+            if (i === results.length - 1 && successCount < count) {
+                let moreResults = await gis(splitInput[0], buffer, { page: Math.floor(i/10) + 1 });
+                if (moreResults.length > 0) {
+                    results = results.concat(moreResults);
+                }
+            }
+        }
+        i++;
+    }
+    
+    if (successCount < count) {
+        await message.send(`*_Only able to send ${successCount}/${count} images. Some images failed to load._*`);
+    }
+}));
+
 Module({
     pattern: 'sticker ?(.*)',
     use: 'edit',
@@ -106,7 +149,7 @@ Module({
     use: 'edit',
     desc: "Speeds up music & increases pitch. For making sped-up+reverb audios"
 }, (async (message, match) => {
-    if (!message.reply_message) return await message.sendReply(Lang.MP3_NEED_REPLY)
+    if (message.reply_message === false) return await message.sendReply(Lang.MP3_NEED_REPLY)
     var {
         seconds
     } = message.quoted.message[Object.keys(message.quoted.message)[0]];
@@ -193,7 +236,7 @@ Module({
     let LANG = lng,
         ttsMessage = query,
         SPEED = 1.0,
-        VOICE = 'coral';
+        VOICE = 'nova';
     if (langMatch = query.match("\\{([a-z]{2})\\}")) {
         LANG = langMatch[1]
         ttsMessage = ttsMessage.replace(langMatch[0], "")
@@ -217,12 +260,7 @@ Module({
         try {
             const ttsResult = await aiTTS(ttsMessage.trim(), VOICE, SPEED.toFixed(2));
             if (ttsResult && ttsResult.url) {
-                const {
-                    data
-                } = await axios.get(ttsResult.url, {
-                    responseType: 'arraybuffer'
-                });
-                audio = Buffer.from(data);
+                audio = { url: ttsResult.url };
             } else {
                 throw new Error(ttsResult && ttsResult.error ? ttsResult.error : 'AI TTS failed');
             }
@@ -238,11 +276,8 @@ Module({
     
     await message.client.sendMessage(message.jid, {
         audio,
-        mimetype: 'audio/mp4',
-        ptt: true,
-        waveform: Array.from({
-            length: 40
-        }, () => Math.floor(Math.random() * 99))
+        mimetype: 'audio/mpeg',
+        ptt: true
     }, {
         quoted: message.data
     });
