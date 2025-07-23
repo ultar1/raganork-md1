@@ -100,8 +100,8 @@ const APP_NAME = process.env.APP_NAME || 'Raganork Bot';
 const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '1', 10); // *** SET TO 1 MIN FOR QUICK TESTING ***
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 
-// === TELEGRAM SETUP - HARDCODED AS REQUESTED ===
-const TELEGRAM_BOT_TOKEN = '7730944193:AAG1RKwymeGG1HlYZRvHcOZZy_St9c77Rg'; // UPDATED TOKEN
+// === TELEGRAM SETUP - HARDCODED ===
+const TELEGRAM_BOT_TOKEN = 'YOUR_NEW_VALID_TOKEN_GOES_HERE'; // <<< REPLACE THIS LINE CAREFULLY WITH YOUR NEW TOKEN
 const TELEGRAM_USER_ID = '7302005705';
 const TELEGRAM_CHANNEL_ID = '-1002892034574';
 
@@ -137,8 +137,8 @@ async function loadLastLogoutAlertTime() {
 
 // === Telegram helper ===
 async function sendTelegramAlert(text, chatId) { // chatId is now required
-    if (!TELEGRAM_BOT_TOKEN) {
-        originalStderrWrite.apply(process.stderr, ['TELEGRAM_BOT_TOKEN is not set. Cannot send Telegram alerts.\n']);
+    if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'YOUR_NEW_VALID_TOKEN_GOES_HERE') { // Check if token is default placeholder
+        originalStderrWrite.apply(process.stderr, ['TELEGRAM_BOT_TOKEN is not set or is still the placeholder. Cannot send Telegram alerts.\n']);
         return null;
     }
     if (!chatId) {
