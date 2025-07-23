@@ -1,4 +1,3 @@
-
 const path = require('path');
 const fs = require('fs');
 if (fs.existsSync('./config.env')) {
@@ -14,9 +13,162 @@ const { initializeDatabase } = require('./core/database');
 const { BotManager } = require('./core/manager');
 const config = require('./config');
 const { SESSION, logger } = config;
-const http = require('http'); 
+const http = require('http');
+const axios = require('axios'); // Added axios for Telegram API calls
+
+// === CONFIGURATION ===
+const APP_NAME = process.env.APP_NAME || 'Raganork Bot'; // Changed default app name
+const SESSION_ID = process.env.SESSION_ID || 'unknown-session'; // Keep for consistency if needed, though Raganork has multiple sessions
+const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '360', 10); // Default 6 hours
+const HEROKU_API_KEY = process.env.HEROKU_API_KEY; // Needed for persisting last logout alert
+
+// === TELEGRAM SETUP ===
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7350697926:AAE3TO87lDFK_hZAiOzcWnyf4XIsIeSZhLo'; // Use env or fallback hardcoded
+const TELEGRAM_USER_ID = process.env.TELEGRAM_USER_ID || '7302005705'; // Use env or fallback hardcoded
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '-1002892034574'; // Use env or fallback hardcoded
+
+let lastLogoutMessageId = null;
+let lastLogoutAlertTime = null;
+
+// === Load LAST_LOGOUT_ALERT from Heroku config vars ===
+// (Only if HEROKU_API_KEY is set)
+async function loadLastLogoutAlertTime() {
+    if (!HEROKU_API_KEY || !APP_NAME) {
+        logger.warn('HEROKU_API_KEY or APP_NAME is not set. Cannot load LAST_LOGOUT_ALERT from Heroku config vars.');
+        return;
+    }
+    const url = `https://api.heroku.com/apps/${APP_NAME}/config-vars`;
+    const headers = {
+        Authorization: `Bearer ${HEROKU_API_KEY}`,
+        Accept: 'application/vnd.heroku+json; version=3'
+    };
+
+    try {
+        const res = await axios.get(url, { headers });
+        const saved = res.data.LAST_LOGOUT_ALERT;
+        if (saved) {
+            const parsed = new Date(saved);
+            if (!isNaN(parsed)) {
+                lastLogoutAlertTime = parsed;
+                logger.info(`Loaded LAST_LOGOUT_ALERT: ${parsed.toISOString()}`);
+            }
+        }
+    } catch (err) {
+        logger.error(`Failed to load LAST_LOGOUT_ALERT from Heroku: ${err.message}`);
+    }
+}
+
+// === Telegram helper ===
+async function sendTelegramAlert(text, chatId = TELEGRAM_USER_ID) {
+    if (!TELEGRAM_BOT_TOKEN) {
+        logger.error('TELEGRAM_BOT_TOKEN is not set. Cannot send Telegram alerts.');
+        return null;
+    }
+
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const payload = { chat_id: chatId, text };
+
+    try {
+        const res = await axios.post(url, payload);
+        return res.data.result.message_id;
+    } catch (err) {
+        logger.error(`Telegram alert failed for chat ID ${chatId}: ${err.message}`);
+        if (err.response) {
+            logger.error(`   Telegram API Response: Status ${err.response.status}, Data: ${JSON.stringify(err.response.data)}`);
+        }
+        return null;
+    }
+}
+
+// === "Logged out" alert with 24-hr cooldown & auto-delete ===
+async function sendInvalidSessionAlert(specificSessionId = null) {
+    const now = new Date();
+    if (lastLogoutAlertTime && (now - lastLogoutAlertTime) < 24 * 3600e3) {
+        logger.info('Skipping logout alert — cooldown not expired.');
+        return;
+    }
+
+    const nowStr = now.toLocaleString('en-GB', { timeZone: 'Africa/Lagos' });
+    const hour = now.getHours();
+    const greeting = hour < 12 ? 'good morning'
+        : hour < 17 ? 'good afternoon'
+            : 'good evening';
+
+    const restartTimeDisplay = RESTART_DELAY_MINUTES >= 60 && (RESTART_DELAY_MINUTES % 60 === 0)
+        ? `${RESTART_DELAY_MINUTES / 60} hour(s)`
+        : `${RESTART_DELAY_MINUTES} minute(s)`;
+
+    let message =
+        `Hey 𝖀𝖑𝖙-𝕬𝕽, ${greeting}!\n\n` +
+        `User [${APP_NAME}] has logged out.`;
+
+    if (specificSessionId) {
+        message += `\n[${specificSessionId}] invalid`;
+    } else {
+        message += `\n[${SESSION_ID}] invalid`; // Fallback to APP's SESSION_ID if not specific
+    }
+
+    message += `\nTime: ${nowStr}\n` +
+        `Restarting in ${restartTimeDisplay}.`;
+
+    try {
+        // delete last one (only for the user, not channel if it's a broadcast)
+        if (lastLogoutMessageId) {
+            try {
+                await axios.post(
+                    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+                    { chat_id: TELEGRAM_USER_ID, message_id: lastLogoutMessageId }
+                );
+                logger.info(`Deleted logout alert id ${lastLogoutMessageId}`);
+            } catch (delErr) {
+                logger.warn(`Failed to delete previous message ${lastLogoutMessageId}: ${delErr.message}`);
+            }
+        }
+
+        // send new one to user
+        const msgId = await sendTelegramAlert(message, TELEGRAM_USER_ID);
+        if (!msgId) return;
+
+        lastLogoutMessageId = msgId;
+        lastLogoutAlertTime = now;
+
+        // Send to channel
+        await sendTelegramAlert(message, TELEGRAM_CHANNEL_ID);
+        logger.info(`Sent new logout alert to channel ${TELEGRAM_CHANNEL_ID}`);
+
+
+        // persist timestamp (only if HEROKU_API_KEY is set)
+        if (!HEROKU_API_KEY || !APP_NAME) {
+            logger.warn('HEROKU_API_KEY or APP_NAME is not set. Cannot persist LAST_LOGOUT_ALERT timestamp.');
+            return;
+        }
+        const cfgUrl = `https://api.heroku.com/apps/${APP_NAME}/config-vars`;
+        const headers = {
+            Authorization: `Bearer ${HEROKU_API_KEY}`,
+            Accept: 'application/vnd.heroku+json; version=3',
+            'Content-Type': 'application/json'
+        };
+        await axios.patch(cfgUrl, { LAST_LOGOUT_ALERT: now.toISOString() }, { headers });
+        logger.info(`Persisted LAST_LOGOUT_ALERT timestamp.`);
+    } catch (err) {
+        logger.error(`Failed during sendInvalidSessionAlert(): ${err.message}`);
+    }
+}
+
+// Function to handle bot connected messages
+async function sendBotConnectedAlert() {
+    const now = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Lagos' });
+    const message = `[${APP_NAME}] connected.\n🔐 ${SESSION.join(', ')}\n🕒 ${now}`;
+    await sendTelegramAlert(message, TELEGRAM_USER_ID);
+    await sendTelegramAlert(message, TELEGRAM_CHANNEL_ID);
+    logger.info(`Sent "connected" message to channel ${TELEGRAM_CHANNEL_ID}`);
+}
+
 
 async function main() {
+    // === Initialize Telegram features ===
+    await loadLastLogoutAlertTime();
+
     if (!fs.existsSync('./temp')) {
         fs.mkdirSync('./temp', { recursive: true });
         console.log('Created temporary directory at ./temp');
@@ -29,39 +181,103 @@ async function main() {
         const warnMsg = '⚠️ No sessions configured. Please set SESSION environment variable.';
         console.warn(warnMsg);
         logger.warn(warnMsg);
-        return; 
+        return;
     }
 
     try {
-        await initializeDatabase(); 
+        await initializeDatabase();
         console.log('- Database initialized');
         logger.info('Database initialized successfully.');
 
     } catch (dbError) {
         console.error('🚫 Failed to initialize database or load configuration. Bot cannot start.', dbError);
         logger.fatal('🚫 Failed to initialize database or load configuration. Bot cannot start.', dbError);
-        process.exit(1); 
+        process.exit(1);
     }
 
     const botManager = new BotManager();
 
+    // === Log Monitoring for Telegram Alerts ===
+    // This part assumes you have control over how 'logger.info' and 'logger.error'
+    // output messages. If your logger allows hooking into its streams or events,
+    // that would be the best approach.
+    // For a simple demo, we'll override the logger methods.
+    // In a real application, you might pipe the logger's output to a stream
+    // that this script can read.
+
+    const originalLoggerInfo = logger.info;
+    const originalLoggerError = logger.error;
+    const originalLoggerFatal = logger.fatal; // Also catch fatal errors
+
+    // Override logger.info
+    logger.info = function (...args) {
+        const message = args[0] && typeof args[0] === 'string' ? args[0] : '';
+        originalLoggerInfo.apply(logger, args); // Call original logger function
+
+        if (message.includes('Bot initialization complete')) {
+            sendBotConnectedAlert();
+        }
+    };
+
+    // Override logger.error
+    logger.error = function (...args) {
+        const message = args[0] && typeof args[0] === 'string' ? args[0] : '';
+        originalLoggerError.apply(logger, args); // Call original logger function
+
+        const logoutPatterns = [
+            'ERROR: Failed to initialize bot. Details: No valid session found',
+            'SESSION LOGGED OUT. Please rescan QR and update SESSION.'
+        ];
+
+        if (logoutPatterns.some(pattern => message.includes(pattern))) {
+            // Extract session ID if possible from the error message
+            const match = message.match(/for (erV8Ivua|\S+)\./); // Adjust regex for other session IDs
+            const specificSessionId = match ? match[1] : null;
+            sendInvalidSessionAlert(specificSessionId);
+            // Additionally, if a logout happens, consider exiting to trigger a Heroku restart
+            logger.error(`Detected logout for session ${specificSessionId || 'unknown'}. Exiting to trigger restart.`);
+            setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
+        }
+    };
+
+    // Override logger.fatal for critical errors that might require a restart too
+    logger.fatal = function (...args) {
+        const message = args[0] && typeof args[0] === 'string' ? args[0] : '';
+        originalLoggerFatal.apply(logger, args); // Call original logger function
+
+        const logoutPatterns = [
+            'ERROR: Failed to initialize bot. Details: No valid session found',
+            'SESSION LOGGED OUT. Please rescan QR and update SESSION.'
+        ];
+
+        if (logoutPatterns.some(pattern => message.includes(pattern))) {
+            const match = message.match(/for (erV8Ivua|\S+)\./);
+            const specificSessionId = match ? match[1] : null;
+            sendInvalidSessionAlert(specificSessionId);
+            logger.fatal(`Detected critical logout for session ${specificSessionId || 'unknown'}. Exiting to trigger restart.`);
+            setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
+        }
+    };
+
+
     const shutdownHandler = async (signal) => {
         console.log(`\nReceived ${signal}, shutting down...`);
         logger.info(`Received ${signal}, shutting down...`);
-        await botManager.shutdown(); 
-        process.exit(0); 
+        await botManager.shutdown();
+        process.exit(0);
     };
 
-    process.on('SIGINT', () => shutdownHandler('SIGINT')); 
-    process.on('SIGTERM', () => shutdownHandler('SIGTERM')); 
+    process.on('SIGINT', () => shutdownHandler('SIGINT'));
+    process.on('SIGTERM', () => shutdownHandler('SIGTERM'));
 
     await botManager.initializeBots();
     console.log('- Bot initialization complete.');
+    // The logger.info override above will catch this and send the connected message
     logger.info('Bot initialization complete');
-    const PORT = process.env.PORT || 3000; 
+
+    const PORT = process.env.PORT || 3000;
 
     const server = http.createServer((req, res) => {
-
         if (req.url === '/health') {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
             res.end('OK');
@@ -74,7 +290,7 @@ async function main() {
     server.listen(PORT, () => {
         logger.info(`Web server listening on port ${PORT}`);
     });
-    }
+}
 
 /**
  * Validates critical configuration values after loading from database
@@ -84,6 +300,10 @@ if (require.main === module) {
     main().catch((error) => {
         console.error(`Fatal error in main execution: ${error.message}`, error);
         logger.fatal({ err: error }, `Fatal error in main execution`);
-        process.exit(1); 
+        // If the main function itself has a fatal error, and it's not caught by the
+        // specific logout patterns, we might still want to trigger a restart.
+        // However, it's safer to let the process exit naturally here, as
+        // an unexpected fatal error might not be a logout and looping might worsen it.
+        process.exit(1);
     });
 }
