@@ -23,9 +23,10 @@ const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '360
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY; // Needed for persisting last logout alert
 
 // === TELEGRAM SETUP ===
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7350697926:AAE3TO87lDFK_hZAiOzcWnyf4XIsIeSZhLo'; // Use env or fallback hardcoded
-const TELEGRAM_USER_ID = process.env.TELEGRAM_USER_ID || '7302005705'; // Use env or fallback hardcoded
-const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '-1002892034574'; // Use env or fallback hardcoded
+// It's highly recommended to set these in Heroku Config Vars
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7350697926:AAE3TO87lDFK_hZAiOzcWnyf4XIsIeSZhLo'; // Fallback hardcoded
+const TELEGRAM_USER_ID = process.env.TELEGRAM_USER_ID || '7302005705'; // Fallback hardcoded
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '-1002892034574'; // Fallback hardcoded
 
 let lastLogoutMessageId = null;
 let lastLogoutAlertTime = null;
@@ -70,6 +71,7 @@ async function sendTelegramAlert(text, chatId = TELEGRAM_USER_ID) {
 
     try {
         const res = await axios.post(url, payload);
+        logger.info(`Telegram message sent to chat ID ${chatId}: ${text.substring(0, 50)}...`); // Log success
         return res.data.result.message_id;
     } catch (err) {
         logger.error(`Telegram alert failed for chat ID ${chatId}: ${err.message}`);
@@ -115,6 +117,7 @@ async function sendInvalidSessionAlert(specificSessionId = null) {
         // delete last one (only for the user, not channel if it's a broadcast)
         if (lastLogoutMessageId) {
             try {
+                logger.info(`Attempting to delete previous logout alert id ${lastLogoutMessageId}`);
                 await axios.post(
                     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
                     { chat_id: TELEGRAM_USER_ID, message_id: lastLogoutMessageId }
@@ -137,7 +140,7 @@ async function sendInvalidSessionAlert(specificSessionId = null) {
         logger.info(`Sent new logout alert to channel ${TELEGRAM_CHANNEL_ID}`);
 
 
-        // persist timestamp (only if HEROKU_API_KEY is set)
+        // persist timestamp (only if HEROKU_API_KEY and APP_NAME are set)
         if (!HEROKU_API_KEY || !APP_NAME) {
             logger.warn('HEROKU_API_KEY or APP_NAME is not set. Cannot persist LAST_LOGOUT_ALERT timestamp.');
             return;
@@ -198,12 +201,8 @@ async function main() {
     const botManager = new BotManager();
 
     // === Log Monitoring for Telegram Alerts ===
-    // This part assumes you have control over how 'logger.info' and 'logger.error'
-    // output messages. If your logger allows hooking into its streams or events,
-    // that would be the best approach.
-    // For a simple demo, we'll override the logger methods.
-    // In a real application, you might pipe the logger's output to a stream
-    // that this script can read.
+    // We are overriding the logger methods to intercept messages.
+    // Make sure 'logger' is the actual object used for logging these messages.
 
     const originalLoggerInfo = logger.info;
     const originalLoggerError = logger.error;
@@ -212,9 +211,13 @@ async function main() {
     // Override logger.info
     logger.info = function (...args) {
         const message = args[0] && typeof args[0] === 'string' ? args[0] : '';
+        console.log(`[DEBUG - INFO INTERCEPTED] Raw Args:`, args); // Log raw args for full context
+        console.log(`[DEBUG - INFO INTERCEPTED] Message String: "${message}"`); // <-- DEBUG LINE
         originalLoggerInfo.apply(logger, args); // Call original logger function
 
-        if (message.includes('Bot initialization complete')) {
+        // Check for 'Bot initialization complete' or any message that indicates bot started successfully
+        if (message.includes('Bot initialization complete') || message.includes('Bot started')) {
+            console.log('[DEBUG] "Bot started" or "initialization complete" message detected!'); // <-- DEBUG LINE
             sendBotConnectedAlert();
         }
     };
@@ -222,40 +225,60 @@ async function main() {
     // Override logger.error
     logger.error = function (...args) {
         const message = args[0] && typeof args[0] === 'string' ? args[0] : '';
+        console.log(`[DEBUG - ERROR INTERCEPTED] Raw Args:`, args); // Log raw args for full context
+        console.log(`[DEBUG - ERROR INTERCEPTED] Message String: "${message}"`); // <-- DEBUG LINE
         originalLoggerError.apply(logger, args); // Call original logger function
 
+        // Refined logout patterns to be more robust
         const logoutPatterns = [
             'ERROR: Failed to initialize bot. Details: No valid session found',
-            'SESSION LOGGED OUT. Please rescan QR and update SESSION.'
+            'SESSION LOGGED OUT. Please rescan QR and update SESSION.',
+            'Reason: logout', // Common in some bot frameworks for logout
+            'Authentication Error' // Generic auth error that might lead to logout
         ];
 
         if (logoutPatterns.some(pattern => message.includes(pattern))) {
-            // Extract session ID if possible from the error message
-            const match = message.match(/for (erV8Ivua|\S+)\./); // Adjust regex for other session IDs
+            console.log('[DEBUG] Logout pattern detected in error log!'); // <-- DEBUG LINE
+            // Attempt to extract session ID more generally (captures any word after "for ")
+            const match = message.match(/for (\S+)\./); // Catches "for XYZ."
             const specificSessionId = match ? match[1] : null;
+
             sendInvalidSessionAlert(specificSessionId);
-            // Additionally, if a logout happens, consider exiting to trigger a Heroku restart
             logger.error(`Detected logout for session ${specificSessionId || 'unknown'}. Exiting to trigger restart.`);
-            setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
+            // Only exit if HEROKU_API_KEY is configured, otherwise keep running for local debugging
+            if (HEROKU_API_KEY) {
+                setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
+            } else {
+                logger.warn('HEROKU_API_KEY not set. Not forcing process exit after logout detection.');
+            }
         }
     };
 
     // Override logger.fatal for critical errors that might require a restart too
     logger.fatal = function (...args) {
         const message = args[0] && typeof args[0] === 'string' ? args[0] : '';
+        console.log(`[DEBUG - FATAL INTERCEPTED] Raw Args:`, args); // Log raw args for full context
+        console.log(`[DEBUG - FATAL INTERCEPTED] Message String: "${message}"`); // <-- DEBUG LINE
         originalLoggerFatal.apply(logger, args); // Call original logger function
 
         const logoutPatterns = [
             'ERROR: Failed to initialize bot. Details: No valid session found',
-            'SESSION LOGGED OUT. Please rescan QR and update SESSION.'
+            'SESSION LOGGED OUT. Please rescan QR and update SESSION.',
+            'Reason: logout',
+            'Authentication Error'
         ];
 
         if (logoutPatterns.some(pattern => message.includes(pattern))) {
-            const match = message.match(/for (erV8Ivua|\S+)\./);
+            console.log('[DEBUG] Logout pattern detected in fatal log!'); // <-- DEBUG LINE
+            const match = message.match(/for (\S+)\./);
             const specificSessionId = match ? match[1] : null;
             sendInvalidSessionAlert(specificSessionId);
             logger.fatal(`Detected critical logout for session ${specificSessionId || 'unknown'}. Exiting to trigger restart.`);
-            setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
+            if (HEROKU_API_KEY) {
+                setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
+            } else {
+                logger.warn('HEROKU_API_KEY not set. Not forcing process exit after logout detection.');
+            }
         }
     };
 
@@ -273,7 +296,15 @@ async function main() {
     await botManager.initializeBots();
     console.log('- Bot initialization complete.');
     // The logger.info override above will catch this and send the connected message
-    logger.info('Bot initialization complete');
+    logger.info('Bot initialization complete'); // This line triggers the 'Bot connected' alert
+
+    // --- TEMPORARY TEST CALL FOR TELEGRAM ALERTS (UNCOMMENT TO TEST) ---
+    // console.log('--- Initiating direct Telegram test messages ---');
+    // await sendTelegramAlert('🧪 Test Message: Raganork bot is attempting to send a direct message to your user ID. If you see this, personal Telegram alerts are working!');
+    // await sendTelegramAlert('📣 Test Message: Raganork bot is attempting to send a direct message to your channel. If you see this, channel alerts are working!', TELEGRAM_CHANNEL_ID);
+    // console.log('--- Direct Telegram test messages sent (check Telegram) ---');
+    // -------------------------------------------------------------------
+
 
     const PORT = process.env.PORT || 3000;
 
