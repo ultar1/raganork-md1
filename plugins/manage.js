@@ -124,6 +124,33 @@ Module(
 
 Module(
   {
+    pattern: "delvar ?(.*)",
+    fromMe: true,
+    desc: "Delete bot variable",
+    usage: ".delvar MY_VAR",
+  },
+  async (message, args) => {
+    const key = args[1]?.trim();
+    if (!key) {
+      return await message.sendReply(
+        "_Please provide a variable name. Use: .delvar MY_VAR_"
+      );
+    }
+ try {
+      if (config[key] === undefined) {
+        return await message.sendReply(`_Variable '${key}' not found._`);
+      }
+      await delVar(key.trim(), message);
+    } catch (error) {
+      await message.sendReply(
+        `_Failed to delete variable '${key.trim()}'. Error: ${error.message}_`
+      );
+    }
+  }
+);
+
+Module(
+  {
     pattern: "allvar",
     fromMe: true,
     desc: "Get all bot variables",
@@ -288,8 +315,7 @@ Module(
         })
         .filter((x) => x)
         .join(",");
-      await m.client.sendMessage(m.jid, {
-        text: "_Added @" + newSudo + " as sudo_",
+      await m.sendMessage("_Added @" + newSudo + " as sudo_", "text", {
         mentions: [newSudo + "@s.whatsapp.net"],
       });
       await setVar("SUDO", setSudo);
@@ -326,8 +352,7 @@ Module(
       setSudo = setSudo
         .filter((x) => x !== newSudo.replace(/[^0-9]/g, ""))
         .join(",");
-      await m.client.sendMessage(m.jid, {
-        text: "_Removed @" + newSudo + " from sudo!_",
+      await m.sendMessage("_Removed @" + newSudo + " from sudo!_", "text", {
         mentions: [newSudo + "@s.whatsapp.net"],
       });
       await setVar("SUDO", setSudo, m);
@@ -603,11 +628,7 @@ Module(
       ? await isAdmin(message, message.sender)
       : false;
 
-    if (!(message.fromOwner || adminAccesValidated)) {
-      return await message.sendReply(
-        "_You need admin privileges to use this command!_"
-      );
-    }
+    if (!(message.fromOwner || adminAccesValidated)) return;
 
     const input = match[1] ? match[1].toLowerCase().trim() : "";
     const args = input.split(" ");
@@ -1032,8 +1053,7 @@ Module(
             `⚠️ *Link Detected!*\n\n_Links are not allowed in this group._`;
 
           if (antilinkConf.mode === "delete") {
-            await message.client.sendMessage(message.jid, {
-              text: customMessage,
+            await message.sendMessage(customMessage, "text", {
               mentions: [usr],
             });
           } else if (antilinkConf.mode === "warn") {
@@ -1060,26 +1080,29 @@ Module(
                     [usr],
                     "remove"
                   );
-                  await message.client.sendMessage(message.jid, {
-                    text:
-                      `${customMessage}\n\n` +
+                  await message.sendMessage(
+                    `${customMessage}\n\n` +
                       `*Action:* User kicked for exceeding warning limit\n` +
                       `*Warnings:* ${currentWarns}/${warnLimit}`,
-                    mentions: [usr],
-                  });
+                    "text",
+                    {
+                      mentions: [usr],
+                    }
+                  );
                 } catch (kickError) {
-                  await message.client.sendMessage(message.jid, {
-                    text:
-                      `${customMessage}\n\n` +
+                  await message.sendMessage(
+                    `${customMessage}\n\n` +
                       `*Warnings:* ${currentWarns}/${warnLimit}\n` +
                       `*Error:* Failed to kick user`,
-                    mentions: [usr],
-                  });
+                    "text",
+                    {
+                      mentions: [usr],
+                    }
+                  );
                 }
               } else {
-                await message.client.sendMessage(message.jid, {
-                  text:
-                    `${customMessage}\n\n` +
+                await message.sendMessage(
+                  `${customMessage}\n\n` +
                     `*Warnings:* ${currentWarns}/${warnLimit}\n` +
                     `*Remaining:* ${remaining}\n\n` +
                     `${
@@ -1087,13 +1110,15 @@ Module(
                         ? "_Next violation will result in a kick!_"
                         : `_${remaining} more warnings before kick._`
                     }`,
-                  mentions: [usr],
-                });
+                  "text",
+                  {
+                    mentions: [usr],
+                  }
+                );
               }
             } catch (error) {
               console.error("Antilink warn error:", error);
-              await message.client.sendMessage(message.jid, {
-                text: customMessage,
+              await message.sendMessage(customMessage, "text", {
                 mentions: [usr],
               });
             }
@@ -1104,13 +1129,11 @@ Module(
                 [usr],
                 "remove"
               );
-              await message.client.sendMessage(message.jid, {
-                text: `${customMessage}\n\n*Action:* User kicked for sending unauthorized link`,
+              await message.sendMessage(`${customMessage}\n\n*Action:* User kicked for sending unauthorized link`, "text", {
                 mentions: [usr],
               });
             } catch (kickError) {
-              await message.client.sendMessage(message.jid, {
-                text: `${customMessage}\n\n*Error:* Failed to kick user`,
+              await message.sendMessage(`${customMessage}\n\n*Error:* Failed to kick user`, "text", {
                 mentions: [usr],
               });
             }
@@ -1165,7 +1188,7 @@ Module(
         if (return_val && typeof return_val !== "string")
           return_val = util.inspect(return_val);
         if (return_val) {
-          await message.send(return_val);
+          await message.sendMessage(return_val, "text");
         } else {
           const reactionMessage = {
             react: {
@@ -1173,10 +1196,11 @@ Module(
               key: m.data.key,
             },
           };
+          
           await m.client.sendMessage(m.jid, reactionMessage);
         }
       } catch (e) {
-        if (e) await message.send(util.format(e));
+        if (e) await message.sendMessage(util.format(e), "text");
       }
     }
   }
