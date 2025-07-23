@@ -41,8 +41,8 @@
     "sqlite3": "^5.1.7",
     "youtube-sr": "^4.3.11",
     "ytdlp-nodejs": "^2.3.0"
-  }
-   "engines": {
+  },
+  "engines": {
     "node": "20.3.0"
-   }
+  }
 }
