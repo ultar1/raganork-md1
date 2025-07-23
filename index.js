@@ -59,8 +59,8 @@ function handleLogLine(line, streamType) {
     const logoutPatterns = [
         'ERROR: Failed to initialize bot. Details: No valid session found',
         'SESSION LOGGED OUT. Please rescan QR and update SESSION.',
-        'Reason: logout', // Common in some bot frameworks for logout
-        'Authentication Error' // Generic auth error that might lead to logout
+        'Reason: logout',
+        'Authentication Error'
     ];
 
     if (logoutPatterns.some(pattern => line.includes(pattern))) {
@@ -100,10 +100,10 @@ const APP_NAME = process.env.APP_NAME || 'Raganork Bot';
 const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '1', 10); // *** SET TO 1 MIN FOR QUICK TESTING ***
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 
-// === TELEGRAM SETUP ===
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN_HERE'; // <<< IMPORTANT: REPLACE WITH YOUR TOKEN
-const TELEGRAM_USER_ID = process.env.TELEGRAM_USER_ID || 'YOUR_TELEGRAM_USER_ID_HERE';     // <<< IMPORTANT: REPLACE WITH YOUR USER ID
-const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || 'YOUR_TELEGRAM_CHANNEL_ID_HERE'; // <<< IMPORTANT: REPLACE WITH YOUR CHANNEL ID
+// === TELEGRAM SETUP - HARDCODED AS REQUESTED ===
+const TELEGRAM_BOT_TOKEN = '7350697926:AAE3TO87lDFK_hZAiOzcWnyf4XIsIeSZhLo';
+const TELEGRAM_USER_ID = '7302005705';
+const TELEGRAM_CHANNEL_ID = '-1002892034574';
 
 let lastLogoutMessageId = null;
 let lastLogoutAlertTime = null;
@@ -166,7 +166,7 @@ async function sendTelegramAlert(text, chatId) { // chatId is now required
 async function sendInvalidSessionAlert(specificSessionId = null) {
     const now = new Date();
     if (lastLogoutAlertTime && (now - lastLogoutAlertTime) < 24 * 3600e3) {
-        originalStdoutWrite.apply(process.stdout, ['Skipping logout alert — cooldown not expired.\n']);
+        originalStdoutWrite.apply(process.stdout, ['Skipping logout alert -- cooldown not expired.\n']);
         return;
     }
 
@@ -181,7 +181,7 @@ async function sendInvalidSessionAlert(specificSessionId = null) {
         : `${RESTART_DELAY_MINUTES} minute(s)`;
 
     let message =
-        `Hey 𝖀𝖑𝖙-𝕬𝕽, ${greeting}!\n\n` +
+        `Hey Ult-AR, ${greeting}!\n\n` +
         `User [${APP_NAME}] has logged out.`;
 
     if (specificSessionId) {
@@ -236,7 +236,7 @@ async function sendInvalidSessionAlert(specificSessionId = null) {
 // Function to handle bot connected messages
 async function sendBotConnectedAlert() {
     const now = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Lagos' });
-    const message = `[${APP_NAME}] connected.\n🔐 ${SESSION.join(', ')}\n🕒 ${now}`;
+    const message = `[${APP_NAME}] connected.\nSession IDs: ${SESSION.join(', ')}\nTime: ${now}`;
     await sendTelegramAlert(message, TELEGRAM_USER_ID);
     await sendTelegramAlert(message, TELEGRAM_CHANNEL_ID);
     originalStdoutWrite.apply(process.stdout, [`Sent "connected" message to channel ${TELEGRAM_CHANNEL_ID}\n`]);
@@ -253,7 +253,7 @@ async function main() {
     originalStdoutWrite.apply(process.stdout, [`Raganork v${require('./package.json').version}\n`]);
     originalStdoutWrite.apply(process.stdout, [`- Configured sessions: ${SESSION.join(', ')}\n`]);
     if (SESSION.length === 0) {
-        const warnMsg = '⚠️ No sessions configured. Please set SESSION environment variable.';
+        const warnMsg = 'No sessions configured. Please set SESSION environment variable.';
         originalStderrWrite.apply(process.stderr, [`${warnMsg}\n`]);
         return;
     }
@@ -262,7 +262,7 @@ async function main() {
         await initializeDatabase();
         originalStdoutWrite.apply(process.stdout, ['- Database initialized\n']);
     } catch (dbError) {
-        originalStderrWrite.apply(process.stderr, [`🚫 Failed to initialize database or load configuration. Bot cannot start. ${dbError.message}\n`]);
+        originalStderrWrite.apply(process.stderr, [`Failed to initialize database or load configuration. Bot cannot start. ${dbError.message}\n`]);
         process.exit(1);
     }
 
