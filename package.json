@@ -42,6 +42,7 @@
     "youtube-sr": "^4.3.11",
     "ytdlp-nodejs": "^2.3.0"
   },
+  "packageManager": "yarn@1.22.22",
   "engines": {
     "node": "20.3.0"
   }
