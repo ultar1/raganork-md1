@@ -13,12 +13,14 @@ if (fs.existsSync('./config.env')) {
 const originalStdoutWrite = process.stdout.write;
 const originalStderrWrite = process.stderr.write;
 
+// Buffer for collecting output before processing
 let stdoutBuffer = '';
 let stderrBuffer = '';
 
 // Override process.stdout.write
 process.stdout.write = (chunk, encoding, callback) => {
     stdoutBuffer += chunk.toString();
+    // Process line by line
     let newlineIndex;
     while ((newlineIndex = stdoutBuffer.indexOf('\n')) !== -1) {
         const line = stdoutBuffer.substring(0, newlineIndex);
@@ -31,6 +33,7 @@ process.stdout.write = (chunk, encoding, callback) => {
 // Override process.stderr.write
 process.stderr.write = (chunk, encoding, callback) => {
     stderrBuffer += chunk.toString();
+    // Process line by line
     let newlineIndex;
     while ((newlineIndex = stderrBuffer.indexOf('\n')) !== -1) {
         const line = stderrBuffer.substring(0, newlineIndex);
@@ -42,13 +45,17 @@ process.stderr.write = (chunk, encoding, callback) => {
 
 // Function to process each log line
 function handleLogLine(line, streamType) {
+    // This console.log will go to original stdout/stderr, avoiding recursion
     originalStdoutWrite.apply(process.stdout, [`[DEBUG - ${streamType.toUpperCase()} INTERCEPTED] Line: "${line.trim()}"\n`]);
 
+    // Check for 'Bot started' message
     if (line.includes('Bot initialization complete') || line.includes('Bot started')) {
         originalStdoutWrite.apply(process.stdout, ['[DEBUG] "Bot started" or "initialization complete" message detected!\n']);
+        // Call the alert function (needs to be defined after imports)
         sendBotConnectedAlert().catch(err => originalStderrWrite.apply(process.stderr, [`Error sending connected alert: ${err.message}\n`]));
     }
 
+    // Check for logout patterns
     const logoutPatterns = [
         'ERROR: Failed to initialize bot. Details: No valid session found',
         'SESSION LOGGED OUT. Please rescan QR and update SESSION.',
@@ -61,8 +68,10 @@ function handleLogLine(line, streamType) {
         const match = line.match(/for (\S+)\./);
         const specificSessionId = match ? match[1] : null;
 
+        // Call the alert function (needs to be defined after imports)
         sendInvalidSessionAlert(specificSessionId).catch(err => originalStderrWrite.apply(process.stderr, [`Error sending logout alert: ${err.message}\n`]));
 
+        // Trigger restart, but only if HEROKU_API_KEY is set for production
         if (process.env.HEROKU_API_KEY) {
             originalStderrWrite.apply(process.stderr, [`Detected logout for session ${specificSessionId || 'unknown'}. Scheduling process exit in ${RESTART_DELAY_MINUTES} minute(s).\n`]);
             setTimeout(() => process.exit(1), RESTART_DELAY_MINUTES * 60 * 1000);
@@ -73,6 +82,7 @@ function handleLogLine(line, streamType) {
 }
 // === LOW-LEVEL LOG INTERCEPTION END ===
 
+
 const { suppressLibsignalLogs, addYtdlp60fpsSupport } = require('./core/helpers');
 
 suppressLibsignalLogs();
@@ -81,26 +91,27 @@ addYtdlp60fpsSupport();
 const { initializeDatabase } = require('./core/database');
 const { BotManager } = require('./core/manager');
 const config = require('./config');
-const { SESSION, logger } = config;
+const { SESSION, logger } = config; // Keep logger import as it might be used internally
 const http = require('http');
-const axios = require('axios');
+const axios = require('axios'); // Added axios for Telegram API calls
 
 // === CONFIGURATION ===
 const APP_NAME = process.env.APP_NAME || 'Raganork Bot';
-const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '1', 10);
+const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '1', 10); // *** SET TO 1 MIN FOR QUICK TESTING ***
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 
-// === TELEGRAM SETUP ===
-const TELEGRAM_BOT_TOKEN = '7730944193:AAG1RKwymeGGX1HlYZRvHcOZZy_St9c77Rg';
+// === TELEGRAM SETUP - HARDCODED ===
+const TELEGRAM_BOT_TOKEN = '7730944193:AAG1RKwymeGGX1HlYZRvHcOZZy_St9c77Rg'; // <<< REPLACE THIS LINE CAREFULLY WITH YOUR NEW TOKEN
 const TELEGRAM_USER_ID = '7302005705';
 const TELEGRAM_CHANNEL_ID = '-1002892034574';
 
 let lastLogoutMessageId = null;
 let lastLogoutAlertTime = null;
 
+// === Load LAST_LOGOUT_ALERT from Heroku config vars ===
 async function loadLastLogoutAlertTime() {
     if (!HEROKU_API_KEY || !APP_NAME) {
-        originalStdoutWrite.apply(process.stdout, ['HEROKU_API_KEY or APP_NAME is not set. Cannot load LAST_LOGOUT_ALERT.\n']);
+        originalStdoutWrite.apply(process.stdout, ['HEROKU_API_KEY or APP_NAME is not set. Cannot load LAST_LOGOUT_ALERT from Heroku config vars.\n']);
         return;
     }
     const url = `https://api.heroku.com/apps/${APP_NAME}/config-vars`;
@@ -125,18 +136,18 @@ async function loadLastLogoutAlertTime() {
 }
 
 // === Telegram helper ===
-async function sendTelegramAlert(text, chatId) {
-    if (!TELEGRAM_BOT_TOKEN) {
-        originalStderrWrite.apply(process.stderr, ['TELEGRAM_BOT_TOKEN is not set. Cannot send alerts.\n']);
+async function sendTelegramAlert(text, chatId) { // chatId is now required
+    if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'YOUR_NEW_VALID_TOKEN_GOES_HERE') { // Check if token is default placeholder
+        originalStderrWrite.apply(process.stderr, ['TELEGRAM_BOT_TOKEN is not set or is still the placeholder. Cannot send Telegram alerts.\n']);
         return null;
     }
     if (!chatId) {
-        originalStderrWrite.apply(process.stderr, ['Telegram chatId is not provided for alert.\n']);
+        originalStderrWrite.apply(process.stderr, ['Telegram chatId is not provided for alert. Cannot send.\n']);
         return null;
     }
 
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const payload = { chat_id: chatId, text, parse_mode: 'Markdown' };
+    const payload = { chat_id: chatId, text };
 
     try {
         const res = await axios.post(url, payload);
@@ -145,13 +156,13 @@ async function sendTelegramAlert(text, chatId) {
     } catch (err) {
         originalStderrWrite.apply(process.stderr, [`Telegram alert failed for chat ID ${chatId}: ${err.message}\n`]);
         if (err.response) {
-            originalStderrWrite.apply(process.stderr, [`   API Response: Status ${err.response.status}, Data: ${JSON.stringify(err.response.data)}\n`]);
+            originalStderrWrite.apply(process.stderr, [`   Telegram API Response: Status ${err.response.status}, Data: ${JSON.stringify(err.response.data)}\n`]);
         }
         return null;
     }
 }
 
-// === "Logged out" alert with 24-hr cooldown ===
+// === "Logged out" alert with 24-hr cooldown & auto-delete ===
 async function sendInvalidSessionAlert(specificSessionId = null) {
     const now = new Date();
     if (lastLogoutAlertTime && (now - lastLogoutAlertTime) < 24 * 3600e3) {
@@ -161,28 +172,38 @@ async function sendInvalidSessionAlert(specificSessionId = null) {
 
     const nowStr = now.toLocaleString('en-GB', { timeZone: 'Africa/Lagos' });
     const hour = now.getHours();
-    const greeting = hour < 12 ? 'good morning' : hour < 17 ? 'good afternoon' : 'good evening';
+    const greeting = hour < 12 ? 'good morning'
+        : hour < 17 ? 'good afternoon'
+            : 'good evening';
 
     const restartTimeDisplay = RESTART_DELAY_MINUTES >= 60 && (RESTART_DELAY_MINUTES % 60 === 0)
         ? `${RESTART_DELAY_MINUTES / 60} hour(s)`
         : `${RESTART_DELAY_MINUTES} minute(s)`;
 
-    let message = `Hey Ult-AR, ${greeting}!\n\nUser \`${APP_NAME}\` has logged out.`;
+    let message =
+        `Hey Ult-AR, ${greeting}!\n\n` +
+        `User [${APP_NAME}] has logged out.`;
 
     if (specificSessionId) {
-        message += `\nSession \`${specificSessionId}\` is invalid`;
+        message += `\n[${specificSessionId}] invalid`;
     } else {
-        message += `\nAn unknown session is invalid`;
+        message += `\n[UNKNOWN_SESSION] invalid`; // Fallback if no specific ID or APP_NAME.
     }
 
-    message += `\nTime: ${nowStr}\nRestarting in ${restartTimeDisplay}.`;
+    message += `\nTime: ${nowStr}\n` +
+        `Restarting in ${restartTimeDisplay}.`;
 
     try {
         if (lastLogoutMessageId) {
             try {
-                await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`, { chat_id: TELEGRAM_USER_ID, message_id: lastLogoutMessageId });
+                originalStdoutWrite.apply(process.stdout, [`Attempting to delete previous logout alert id ${lastLogoutMessageId}\n`]);
+                await axios.post(
+                    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`,
+                    { chat_id: TELEGRAM_USER_ID, message_id: lastLogoutMessageId }
+                );
+                originalStdoutWrite.apply(process.stdout, [`Deleted logout alert id ${lastLogoutMessageId}\n`]);
             } catch (delErr) {
-                // Ignore if message couldn't be deleted
+                originalStderrWrite.apply(process.stderr, [`Failed to delete previous message ${lastLogoutMessageId}: ${delErr.message}\n`]);
             }
         }
 
@@ -193,27 +214,34 @@ async function sendInvalidSessionAlert(specificSessionId = null) {
         lastLogoutAlertTime = now;
 
         await sendTelegramAlert(message, TELEGRAM_CHANNEL_ID);
+        originalStdoutWrite.apply(process.stdout, [`Sent new logout alert to channel ${TELEGRAM_CHANNEL_ID}\n`]);
 
-        if (!HEROKU_API_KEY || !APP_NAME) return;
+        if (!HEROKU_API_KEY || !APP_NAME) {
+            originalStdoutWrite.apply(process.stdout, ['HEROKU_API_KEY or APP_NAME is not set. Cannot persist LAST_LOGOUT_ALERT timestamp.\n']);
+            return;
+        }
         const cfgUrl = `https://api.heroku.com/apps/${APP_NAME}/config-vars`;
-        const headers = { Authorization: `Bearer ${HEROKU_API_KEY}`, Accept: 'application/vnd.heroku+json; version=3', 'Content-Type': 'application/json' };
+        const headers = {
+            Authorization: `Bearer ${HEROKU_API_KEY}`,
+            Accept: 'application/vnd.heroku+json; version=3',
+            'Content-Type': 'application/json'
+        };
         await axios.patch(cfgUrl, { LAST_LOGOUT_ALERT: now.toISOString() }, { headers });
-
+        originalStdoutWrite.apply(process.stdout, [`Persisted LAST_LOGOUT_ALERT timestamp.\n`]);
     } catch (err) {
         originalStderrWrite.apply(process.stderr, [`Failed during sendInvalidSessionAlert(): ${err.message}\n`]);
     }
 }
 
-// === "Connected" alert ===
+// Function to handle bot connected messages
 async function sendBotConnectedAlert() {
     const now = new Date().toLocaleString('en-GB', { timeZone: 'Africa/Lagos' });
-    const copyableSessions = SESSION.map(s => `\`${s}\``).join(', ');
-    const message = `\`${APP_NAME}\` connected.\nSession IDs: ${copyableSessions}\nTime: ${now}`;
-    
+    const message = `[${APP_NAME}] connected.\nSession IDs: ${SESSION.join(', ')}\nTime: ${now}`;
     await sendTelegramAlert(message, TELEGRAM_USER_ID);
     await sendTelegramAlert(message, TELEGRAM_CHANNEL_ID);
     originalStdoutWrite.apply(process.stdout, [`Sent "connected" message to channel ${TELEGRAM_CHANNEL_ID}\n`]);
 }
+
 
 async function main() {
     await loadLastLogoutAlertTime();
@@ -225,7 +253,8 @@ async function main() {
     originalStdoutWrite.apply(process.stdout, [`Raganork v${require('./package.json').version}\n`]);
     originalStdoutWrite.apply(process.stdout, [`- Configured sessions: ${SESSION.join(', ')}\n`]);
     if (SESSION.length === 0) {
-        originalStderrWrite.apply(process.stderr, ['No sessions configured. Please set SESSION env var.\n']);
+        const warnMsg = 'No sessions configured. Please set SESSION environment variable.';
+        originalStderrWrite.apply(process.stderr, [`${warnMsg}\n`]);
         return;
     }
 
@@ -233,7 +262,7 @@ async function main() {
         await initializeDatabase();
         originalStdoutWrite.apply(process.stdout, ['- Database initialized\n']);
     } catch (dbError) {
-        originalStderrWrite.apply(process.stderr, [`Failed to initialize database. Bot cannot start. ${dbError.message}\n`]);
+        originalStderrWrite.apply(process.stderr, [`Failed to initialize database or load configuration. Bot cannot start. ${dbError.message}\n`]);
         process.exit(1);
     }
 
@@ -250,8 +279,10 @@ async function main() {
 
     await botManager.initializeBots();
     originalStdoutWrite.apply(process.stdout, ['- Bot initialization complete.\n']);
+    // The low-level `process.stdout.write` override should catch this and trigger the connected message
 
     const PORT = process.env.PORT || 3000;
+
     const server = http.createServer((req, res) => {
         if (req.url === '/health') {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -266,6 +297,10 @@ async function main() {
         originalStdoutWrite.apply(process.stdout, [`Web server listening on port ${PORT}\n`]);
     });
 }
+
+/**
+ * Validates critical configuration values after loading from database
+ */
 
 if (require.main === module) {
     main().catch((error) => {
