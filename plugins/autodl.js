@@ -110,15 +110,17 @@ Module({ on: "text", fromMe }, async (message) => {
       // handle youtube separately (only process first url for yt)
       if (platformGroups["youtube"]) {
         let url = platformGroups["youtube"][0];
-        
+
         // Convert YouTube Shorts URL to regular watch URL if needed
         if (url.includes("youtube.com/shorts/")) {
-          const shortId = url.match(/youtube\.com\/shorts\/([A-Za-z0-9_-]+)/)?.[1];
+          const shortId = url.match(
+            /youtube\.com\/shorts\/([A-Za-z0-9_-]+)/
+          )?.[1];
           if (shortId) {
             url = `https://www.youtube.com/watch?v=${shortId}`;
           }
         }
-        
+
         const lowerText = text.toLowerCase();
         const isAudioMode =
           /\baudio\b|\bmp3\b/.test(lowerText) && !isAlreadyCommand(text);
@@ -149,15 +151,13 @@ Module({ on: "text", fromMe }, async (message) => {
                 downloadMsg.key
               );
 
-              await message.sendMessage(
-                { stream: fs.createReadStream(audioPath) },
-                "document",
-                {
-                  fileName: `${result.title}.mp3`,
-                  mimetype: "audio/mpeg",
-                  caption: `_*${result.title}*_`,
-                }
-              );
+              const stream = fs.createReadStream(audioPath);
+              await message.sendMessage({ stream }, "document", {
+                fileName: `${result.title}.mp3`,
+                mimetype: "audio/mpeg",
+                caption: `_*${result.title}*_`,
+              });
+              stream.destroy();
 
               await message.edit(
                 "_Download complete!_",
@@ -165,6 +165,7 @@ Module({ on: "text", fromMe }, async (message) => {
                 downloadMsg.key
               );
 
+              await new Promise((resolve) => setTimeout(resolve, 100));
               if (fs.existsSync(audioPath)) {
                 fs.unlinkSync(audioPath);
               }
@@ -202,7 +203,7 @@ Module({ on: "text", fromMe }, async (message) => {
 
           const uniqueQualities = [
             ...new Set(videoFormats.map((f) => f.quality)),
-          ].slice(0, 5);
+          ];
 
           const videoIdMatch = url.match(
             /(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([^&\s/?]+)/
@@ -245,6 +246,30 @@ Module({ on: "text", fromMe }, async (message) => {
 
             qualityText += `*${index + 1}.* _*${quality}*_${sizeInfo}\n`;
           });
+
+          const audioFormat = info.formats.find((f) => f.type === "audio");
+          if (audioFormat) {
+            let audioSizeInfo = "";
+            if (audioFormat.size) {
+              const parseSize = (sizeStr) => {
+                const match = sizeStr.match(/([\d.]+)\s*(KB|MB|GB)/i);
+                if (!match) return 0;
+                const value = parseFloat(match[1]);
+                const unit = match[2].toUpperCase();
+                if (unit === "KB") return value * 1024;
+                if (unit === "MB") return value * 1024 * 1024;
+                if (unit === "GB") return value * 1024 * 1024 * 1024;
+                return value;
+              };
+              const audioSize = parseSize(audioFormat.size);
+              if (audioSize > 0) {
+                audioSizeInfo = ` ~ _${formatBytes(audioSize)}_`;
+              }
+            }
+            qualityText += `*${
+              uniqueQualities.length + 1
+            }.* _*Audio Only*_${audioSizeInfo}\n`;
+          }
 
           qualityText += "\n_Reply with a number to download_";
           await message.sendReply(qualityText);
