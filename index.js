@@ -107,7 +107,7 @@ const RESTART_DELAY_MINUTES = parseInt(process.env.RESTART_DELAY_MINUTES || '1',
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 
 // === TELEGRAM SETUP - HARDCODED ===
-const TELEGRAM_BOT_TOKEN = '7730944193:AAGgJrE7v41v9l2GLbxit46LLRYzLXRW-vI'; // Your Token
+const TELEGRAM_BOT_TOKEN = '8445525121:AAHptKLywJtFSh6w2CXVYC2Esza6PhAAAnQ'; // Your Token
 const TELEGRAM_USER_ID = '7302005705';
 const TELEGRAM_CHANNEL_ID = '-1002892034574';
 
@@ -309,3 +309,4 @@ if (require.main === module) {
         process.exit(1);
     });
 }
+
