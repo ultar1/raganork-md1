@@ -109,7 +109,7 @@ const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 // === TELEGRAM SETUP - HARDCODED ===
 const TELEGRAM_BOT_TOKEN = '8445525121:AAHptKLywJtFSh6w2CXVYC2Esza6PhAAAnQ'; // Your Token
 const TELEGRAM_USER_ID = '7302005705';
-const TELEGRAM_CHANNEL_ID = '-1002892034574';
+const TELEGRAM_CHANNEL_ID = '-1003620973489';
 
 let lastLogoutMessageId = null;
 let lastLogoutAlertTime = null;
@@ -309,4 +309,5 @@ if (require.main === module) {
         process.exit(1);
     });
 }
+
 
