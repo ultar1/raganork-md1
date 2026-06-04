@@ -185,6 +185,230 @@ async function toBuffer(input) {
   return null;
 }
 
+// ============================================
+// BUTTON/INTERACTIVE MESSAGE HELPERS
+// ============================================
+
+function buildInteractiveButtons(buttons = []) {
+  return buttons.map((b, i) => {
+    if (b && b.name && b.buttonParamsJson) return b;
+    if (b && (b.id || b.text)) {
+      return {
+        name: "quick_reply",
+        buttonParamsJson: JSON.stringify({
+          display_text: b.text || b.displayText || "Button " + (i + 1),
+          id: b.id || "quick_" + (i + 1),
+        }),
+      };
+    }
+    if (b && b.buttonId && b.buttonText?.displayText) {
+      return {
+        name: "quick_reply",
+        buttonParamsJson: JSON.stringify({
+          display_text: b.buttonText.displayText,
+          id: b.buttonId,
+        }),
+      };
+    }
+    return b;
+  });
+}
+
+function validateAuthoringButtons(buttons) {
+  const errors = [];
+  const warnings = [];
+  if (buttons == null) {
+    return { errors: [], warnings: [], valid: true, cleaned: [] };
+  }
+  if (!Array.isArray(buttons)) {
+    errors.push("buttons must be an array");
+    return { errors, warnings, valid: false, cleaned: [] };
+  }
+  const SOFT_BUTTON_CAP = 25;
+  if (buttons.length === 0) {
+    warnings.push("buttons array is empty");
+  } else if (buttons.length > SOFT_BUTTON_CAP) {
+    warnings.push(
+      `buttons count (${buttons.length}) exceeds soft cap of ${SOFT_BUTTON_CAP}; may be rejected by client`
+    );
+  }
+
+  const cleaned = buttons.map((b, idx) => {
+    if (b == null || typeof b !== "object") {
+      errors.push(`button[${idx}] is not an object`);
+      return b;
+    }
+    if (b.name && b.buttonParamsJson) {
+      if (typeof b.buttonParamsJson !== "string") {
+        errors.push(`button[${idx}] buttonParamsJson must be string`);
+      } else {
+        try {
+          JSON.parse(b.buttonParamsJson);
+        } catch (e) {
+          errors.push(
+            `button[${idx}] buttonParamsJson is not valid JSON: ${e.message}`
+          );
+        }
+      }
+      return b;
+    }
+    if (b.id || b.text || b.displayText) {
+      if (!(b.id || b.text || b.displayText)) {
+        errors.push(
+          `button[${idx}] legacy shape missing id or text/displayText`
+        );
+      }
+      return b;
+    }
+    if (
+      b.buttonId &&
+      b.buttonText &&
+      typeof b.buttonText === "object" &&
+      b.buttonText.displayText
+    ) {
+      return b;
+    }
+    if (b.buttonParamsJson) {
+      if (typeof b.buttonParamsJson !== "string") {
+        warnings.push(
+          `button[${idx}] has non-string buttonParamsJson; will attempt to stringify`
+        );
+        try {
+          b.buttonParamsJson = JSON.stringify(b.buttonParamsJson);
+        } catch {
+          errors.push(
+            `button[${idx}] buttonParamsJson could not be serialized`
+          );
+        }
+      } else {
+        try {
+          JSON.parse(b.buttonParamsJson);
+        } catch (e) {
+          warnings.push(
+            `button[${idx}] buttonParamsJson not valid JSON (${e.message})`
+          );
+        }
+      }
+      if (!b.name) {
+        warnings.push(`button[${idx}] missing name; defaulting to quick_reply`);
+        b.name = "quick_reply";
+      }
+      return b;
+    }
+    warnings.push(`button[${idx}] unrecognized shape; passing through unchanged`);
+    return b;
+  });
+
+  return { errors, warnings, valid: errors.length === 0, cleaned };
+}
+
+function validateInteractiveMessageContent(content) {
+  const errors = [];
+  const warnings = [];
+  if (!content || typeof content !== "object") {
+    return { errors: ["content must be an object"], warnings, valid: false };
+  }
+  const interactive = content.interactiveMessage;
+  if (!interactive) {
+    return { errors, warnings, valid: true };
+  }
+  const nativeFlow = interactive.nativeFlowMessage;
+  if (!nativeFlow) {
+    errors.push("interactiveMessage.nativeFlowMessage missing");
+    return { errors, warnings, valid: false };
+  }
+  if (!Array.isArray(nativeFlow.buttons)) {
+    errors.push("nativeFlowMessage.buttons must be an array");
+    return { errors, warnings, valid: false };
+  }
+  if (nativeFlow.buttons.length === 0) {
+    warnings.push("nativeFlowMessage.buttons is empty");
+  }
+  nativeFlow.buttons.forEach((btn, i) => {
+    if (!btn || typeof btn !== "object") {
+      errors.push(`buttons[${i}] is not an object`);
+      return;
+    }
+    if (!btn.buttonParamsJson) {
+      warnings.push(`buttons[${i}] missing buttonParamsJson (may fail to render)`);
+    } else if (typeof btn.buttonParamsJson !== "string") {
+      errors.push(`buttons[${i}] buttonParamsJson must be string`);
+    } else {
+      try {
+        JSON.parse(btn.buttonParamsJson);
+      } catch (e) {
+        warnings.push(
+          `buttons[${i}] buttonParamsJson invalid JSON (${e.message})`
+        );
+      }
+    }
+    if (!btn.name) {
+      warnings.push(`buttons[${i}] missing name; defaulting to quick_reply`);
+      btn.name = "quick_reply";
+    }
+  });
+  return { errors, warnings, valid: errors.length === 0 };
+}
+
+function getButtonType(message) {
+  if (message.listMessage) {
+    return "list";
+  } else if (message.buttonsMessage) {
+    return "buttons";
+  } else if (message.interactiveMessage?.nativeFlowMessage) {
+    return "native_flow";
+  }
+  return null;
+}
+
+function getButtonArgs(message) {
+  const nativeFlow = message.interactiveMessage?.nativeFlowMessage;
+
+  if (nativeFlow || message.buttonsMessage) {
+    return {
+      tag: "biz",
+      attrs: {},
+      content: [
+        {
+          tag: "interactive",
+          attrs: {
+            type: "native_flow",
+            v: "1",
+          },
+          content: [
+            {
+              tag: "native_flow",
+              attrs: {
+                v: "9",
+                name: "mixed",
+              },
+            },
+          ],
+        },
+      ],
+    };
+  } else if (message.listMessage) {
+    return {
+      tag: "biz",
+      attrs: {},
+      content: [
+        {
+          tag: "list",
+          attrs: {
+            v: "2",
+            type: "product_list",
+          },
+        },
+      ],
+    };
+  } else {
+    return {
+      tag: "biz",
+      attrs: {},
+    };
+  }
+}
+
 module.exports = {
   loadBaileys,
   suppressLibsignalLogs,
@@ -193,6 +417,11 @@ module.exports = {
   toBuffer,
   initializeKickBot,
   cleanupKickBot,
+  buildInteractiveButtons,
+  validateAuthoringButtons,
+  validateInteractiveMessageContent,
+  getButtonType,
+  getButtonArgs,
   TEMP_DIR,
   ensureTempDir,
   getTempPath,
