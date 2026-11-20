@@ -11,7 +11,12 @@ const {
   videoIdOf,
   assertWithinLimits,
   qualityMenuText,
+  qualityOptions,
+  formatBytes,
+  failureText,
 } = require("./utils/yt");
+const ui = require("../core/ui");
+const ytEngine = require("./utils/yt-engine");
 const { spotifyTrack } = require("./utils/misc");
 const { accountKey } = require("./utils");
 
@@ -42,8 +47,7 @@ function searchResultText(query, results, footer) {
   return text + footer;
 }
 
-// the video behind line `n` of a search list. the id printed in the line is used, so the video
-// is the one that was listed; lists sent before ids were added are searched again
+// uses the id printed in the line; older lists without ids are searched again
 async function listedVideo(repliedText, n) {
   const lines = repliedText.split("\n");
   const at = lines.findIndex((line) => line.startsWith(`*${n}.*`));
@@ -76,15 +80,46 @@ async function listedVideo(repliedText, n) {
   };
 }
 
-async function runSearch(message, query, footer, errorLabel) {
+// button mode sends no status message (the list is the answer), so results
+// replace the status when there is one and go out as a reply otherwise
+const showResult = (message, status, text) =>
+  status ? message.edit(text, message.jid, status.key) : message.sendReply(text);
+
+// rowCommand(url) -> the command a tapped row runs
+async function runSearch(message, query, footer, errorLabel, list) {
   try {
-    const searchMsg = await message.sendReply("_Searching YouTube..._");
+    const buttons = ui.enabled();
+    const searchMsg = buttons ? null : await message.sendReply("_Searching YouTube..._");
     const results = await searchYoutube(query, 10);
 
     if (!results || results.length === 0) {
-      return await message.edit("_No results found!_", message.jid, searchMsg.key);
+      return await showResult(message, searchMsg, "_No results found!_");
     }
-    await message.edit(searchResultText(query, results, footer), message.jid, searchMsg.key);
+    const text = searchResultText(query, results, footer);
+    if (!buttons) return await showResult(message, searchMsg, text);
+
+    await message.sendList({
+      text,
+      header: list.header,
+      body: `_Results for:_ *${query}*\n${list.body}`,
+      footer: "YouTube",
+      button: list.button,
+      sections: [
+        {
+          title: "Results",
+          rows: results.map((video) => {
+            const url = video.url || watchUrl(video.id);
+            return {
+              title: video.title,
+              description: [video.duration, video.views != null && `${formatViews(video.views)} views`, video.channel?.name]
+                .filter(Boolean)
+                .join(" · "),
+              id: list.rowCommand(url),
+            };
+          }),
+        },
+      ],
+    });
   } catch (error) {
     console.error(errorLabel, error);
     await message.sendReply("_Search failed. Please try again later._");
@@ -105,7 +140,12 @@ Module(
         `_Please provide a search query!_\n_Example: ${helpPrefix()}song faded alan walker_`
       );
     }
-    await runSearch(message, query, "_Reply with a number (1-10) to download audio_", "Song search error:");
+    await runSearch(message, query, "_Reply with a number (1-10) to download audio_", "Song search error:", {
+      header: "🎵 Pick a song",
+      body: "_Tap the button and pick one to download its audio._",
+      button: "Show results",
+      rowCommand: (url) => ui.cmd("play", url),
+    });
   }
 );
 
@@ -123,7 +163,14 @@ Module(
         `_Please provide a search query!_\n_Example: ${helpPrefix()}yts ncs music_`
       );
     }
-    await runSearch(message, query, "_Reply with a number (1-10) to see video details_", "YTS search error:");
+    const url = youtubeUrlFrom(query);
+    if (url) return await showVideoDetails(message, url);
+    await runSearch(message, query, "_Reply with a number (1-10) to see video details_", "YTS search error:", {
+      header: "🔎 YouTube search",
+      body: "_Tap the button and pick a video to see its details._",
+      button: "Show results",
+      rowCommand: (url) => ui.cmd("yts", url),
+    });
   }
 );
 
@@ -144,22 +191,38 @@ Module(
     }
 
     try {
-      const infoMsg = await message.sendReply("_📊 Fetching video info..._");
+      const buttons = ui.enabled();
+      const infoMsg = buttons ? null : await message.sendReply("_📊 Fetching video info..._");
       const info = await getVideoInfo(url);
       assertWithinLimits(info);
 
       const menu = qualityMenuText(info, videoIdOf(url) || info.videoId || "");
-      await message.edit(
-        menu || "_No video formats available for this video._",
-        message.jid,
-        infoMsg.key
-      );
+      if (!menu || !buttons) {
+        return await showResult(message, infoMsg, menu || "_No video formats available for this video._");
+      }
+      const options = qualityOptions(info);
+      await message.sendList({
+        text: menu,
+        header: "🎬 Select quality",
+        body: `_*${info.title}*_\n_Tap the button and pick a quality._`,
+        footer: "YouTube",
+        button: "Choose quality",
+        sections: [
+          {
+            title: "Qualities",
+            rows: options.map((o) => ({
+              title: o.audio ? "Audio only" : o.quality,
+              description: o.size ? `~ ${formatBytes(o.size)}` : "",
+              id: o.audio ? ui.cmd("yta", url) : ui.cmd("video", url, o.quality),
+            })),
+          },
+        ],
+      });
     } catch (error) {
       console.error("YTV info error:", error);
+      const text = failureText(error);
       await message.sendReply(
-        error.code === "YT_LIMIT"
-          ? `_${error.message}_`
-          : "_Failed to fetch video info. Please check the link._"
+        text === "_Download failed!_" ? "_Failed to fetch video info. Please check the link._" : text
       );
     }
   }
@@ -168,11 +231,12 @@ Module(
 Module(
   {
     pattern: "video ?(.*)",
-    desc: "Download YouTube video at 360p",
-    usage: ".video <link>",
+    desc: "Download YouTube video (360p unless a quality is given)",
+    usage: ".video <link> [720p]",
     use: "download",
   },
   async (message, match) => {
+    const quality = match[1]?.match(/(?:^|\s)(\d{3,4}p)\s*$/i)?.[1]?.toLowerCase() || "360p";
     const url = youtubeUrlFrom(match[1] || message.reply_message?.text);
 
     if (!url) {
@@ -180,7 +244,7 @@ Module(
         `_Please provide a valid YouTube link!_\n_Example: ${helpPrefix()}video https://youtube.com/watch?v=xxxxx or https://youtube.com/shorts/xxxxx_`
       );
     }
-    await sendYoutubeVideo(message, url, "360p");
+    await sendYoutubeVideo(message, url, quality);
   }
 );
 
@@ -244,6 +308,35 @@ Module(
   }
 );
 
+const clockOf = (secs) => {
+  if (!secs) return undefined;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const sec = String(Math.floor(secs % 60)).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+};
+
+// .yts <url>: details for a single link (the target of a tapped search row)
+async function showVideoDetails(message, url) {
+  try {
+    const info = await getVideoInfo(url);
+    const id = videoIdOf(url) || info.videoId;
+    await sendVideoDetails(message, {
+      id,
+      url: id ? watchUrl(id) : url,
+      title: info.title,
+      channel: info.channel?.name,
+      duration: clockOf(info.lengthSeconds),
+      views: info.views != null ? formatViews(info.views) : undefined,
+      uploadedAt: info.uploadedAt,
+      thumbnail: info.thumbnail,
+    });
+  } catch (error) {
+    console.error("YTS details error:", error);
+    await message.sendReply(failureText(error));
+  }
+}
+
 async function sendVideoDetails(message, video) {
   let caption = `_*${video.title}*_\n\n`;
   caption += `*Channel:* ${video.channel || "N/A"}\n`;
@@ -264,6 +357,25 @@ async function sendVideoDetails(message, video) {
     thumbnail = Buffer.from(response.data);
   } catch (error) {
     console.error("YTS thumbnail error:", error.message);
+  }
+  if (ui.enabled()) {
+    // the "Open on YouTube" button carries the link, so the body drops the URL line
+    const body = caption
+      .slice(0, caption.indexOf("_Reply with:_"))
+      .replace(/^\*URL:\*.*$/m, "")
+      .trim();
+    return await message.sendButtons({
+      text: caption,
+      body,
+      footer: "YouTube",
+      image: thumbnail,
+      buttons: [
+        { text: "🎵 Audio", id: ui.cmd("play", video.url) },
+        { text: "🎬 Video", id: ui.cmd("ytv", video.url) },
+        { text: "📄 Audio file", id: ui.cmd("yta", video.url) },
+        { text: "Open on YouTube", url: video.url },
+      ],
+    });
   }
   if (thumbnail) await message.sendReply(thumbnail, "image", { caption });
   else await message.sendReply(caption);
@@ -369,6 +481,57 @@ Module(
         await inChatQueue(message, "ytv-video", () => sendYoutubeVideo(message, url, quality));
       }
     }
+  }
+);
+
+Module(
+  {
+    pattern: "ytlogin ?(.*)",
+    fromMe: true,
+    desc: "Sign in to YouTube, for servers YouTube asks to confirm they're not a bot",
+    usage: ".ytlogin | .ytlogin status | .ytlogin force",
+    use: "owner",
+  },
+  async (message, match) => {
+    const arg = match[1]?.trim().toLowerCase();
+    const loggedIn = await ytEngine.isLoggedIn();
+    if (arg === "status") {
+      return await message.sendReply(loggedIn ? "_Signed in to YouTube._" : "_Not signed in to YouTube._");
+    }
+    if (loggedIn && arg !== "force") {
+      return await message.sendReply(
+        `_Already signed in._\n_${helpPrefix()}ytlogout to sign out, ${helpPrefix()}ytlogin force to sign in again._`
+      );
+    }
+    // return once the code is out: waiting for approval would hold the chat's queue
+    await new Promise((codeSent) => {
+      ytEngine
+        .login(async ({ verification_url, user_code, expires_in }) => {
+          await message
+            .sendReply(
+              `*YouTube login*\n\n1. Open ${verification_url}\n2. Enter *${user_code}*\n3. Choose an account and allow access\n\n_Use a spare account. The code expires in ${Math.round(expires_in / 60)} minutes._`
+            )
+            .catch(() => {});
+          codeSent();
+        })
+        .then(() => message.sendReply("_Signed in to YouTube._"))
+        .catch((error) => message.sendReply(`_YouTube login failed: ${error.message}_`))
+        .catch(() => {})
+        .finally(codeSent);
+    });
+  }
+);
+
+Module(
+  {
+    pattern: "ytlogout",
+    fromMe: true,
+    desc: "Sign out of YouTube",
+    use: "owner",
+  },
+  async (message) => {
+    await ytEngine.logout();
+    await message.sendReply("_Signed out of YouTube._");
   }
 );
 

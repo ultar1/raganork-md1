@@ -8,8 +8,6 @@ const { bindings } = require("./baileys");
 const { STABLE_CONNECTION_MS } = require("./reconnect");
 const { sendStartMessage } = require("./start-message");
 
-// connection.update: QR code, close (reconnect or give up), open (start message, start
-// events, schedules). runs inside the session context, registered by bot.setupEventHandlers
 async function handleConnectionUpdate(bot, update) {
   const { connection, lastDisconnect, qr } = update;
   if (qr) {
@@ -22,7 +20,6 @@ async function handleConnectionUpdate(bot, update) {
     );
     console.log(`┌${"─".repeat(50)}┐`);
     qrcode.generate(qr, { small: true }, (qrcode) => {
-      // Add border to QR code for better visibility
       const lines = qrcode.split("\n");
       lines.forEach((line) => {
         console.log(`│${line.padEnd(48)}│`);
@@ -95,7 +92,17 @@ async function handleConnectionUpdate(bot, update) {
     }, STABLE_CONNECTION_MS);
     bot.stableTimer.unref?.();
 
-    // Only send start message on initial connection, not on reconnects
+    // before any owner notice, so legacy SUDO numbers already resolve to lids
+    try {
+      const { migrateSudoToLID } = require("../database");
+      await migrateSudoToLID(bot.sock);
+    } catch (error) {
+      logger.error(
+        { session: bot.sessionId, err: error },
+        `Failed to migrate SUDO to LIDs`,
+      );
+    }
+
     if (!bot.initialConnectMessageSent) {
       console.log(
         `- ✅ [${bot.sessionId}] Bot started: +${
@@ -121,7 +128,6 @@ async function handleConnectionUpdate(bot, update) {
       );
     }
 
-    // CRITICAL: Execute start event handlers immediately after connection is established
     try {
       await startEvent(bot.sock);
     } catch (error) {
@@ -132,17 +138,13 @@ async function handleConnectionUpdate(bot, update) {
     }
 
     try {
-      const { migrateSudoToLID } = require("../database");
-      await migrateSudoToLID(bot.sock);
+      await Schedule(bot.sock, bot.sessionId);
     } catch (error) {
       logger.error(
         { session: bot.sessionId, err: error },
-        `Failed to migrate SUDO to LIDs`,
+        `Failed to start schedules`,
       );
     }
-
-    // Setup additional features after start events
-    await Schedule(bot.sock, bot.sessionId);
     bot.manager?.onSessionStateChange?.();
   }
 }

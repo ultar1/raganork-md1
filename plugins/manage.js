@@ -1,7 +1,5 @@
 const escapeRegex = (word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// the first listed word found in str, or undefined. custom words are patterns
-// (a broken one falls back to plain text); the built-in list matches whole words only
 function containsDisallowedWords(str, disallowedWords, { wholeWord = false } = {}) {
   const text = String(str || "").toLowerCase();
   for (const raw of disallowedWords) {
@@ -23,7 +21,8 @@ function containsDisallowedWords(str, disallowedWords, { wholeWord = false } = {
 const { Module } = require("../main");
 const { filter, groupAdminGuard } = require("./utils");
 const config = require("../config");
-const { settingsMenu } = config;
+const catalog = require("../core/config/catalog");
+const ui = require("../core/ui");
 const fs = require("fs");
 const configStore = require("../core/config/store");
 const context = require("../core/context");
@@ -32,7 +31,6 @@ const { needsRestart } = require("../core/config/schema");
 
 const { helpPrefix, commandName } = require("../core/plugins/registry");
 
-// only keys the schema marks restart: true (LANGUAGE) are not live
 function restartNote(key) {
   return needsRestart(key) ? "\n_Restart needed for this to take effect._" : "";
 }
@@ -44,7 +42,6 @@ const isSecretKey = (key) => {
   return PROTECTED_KEYS.includes(name) || /_(KEY|TOKEN|SECRET)$/.test(name);
 };
 
-// the only chat that is safe for a secret: the owner's chat with themselves
 function inOwnChat(message) {
   const ids = identity.botIds(message.client);
   return message.jid === ids.lid || message.jid === ids.pn;
@@ -54,7 +51,6 @@ const showValue = (key, value, message) =>
   isSecretKey(key) && !inOwnChat(message) ? "[hidden, ask in your own chat]" : value;
 
 async function setVar(key, value, message = false) {
-  // saves to the database, then applies live and emits config:changed
   await configStore.set(key.trim(), value, { persist: true });
   if (message) {
     await message.sendReply(
@@ -66,8 +62,7 @@ async function setVar(key, value, message = false) {
 
 async function delVar(key, message = false) {
   const name = key.trim();
-  // inside a session this removes the session's own value first; when it has none,
-  // the global value is the one the owner means, so delete that instead
+  // inside a session, fall back to deleting the global value when there's no session one
   let removed = await configStore.unset(name, { persist: true });
   if (!removed && context.accountId()) {
     removed = await context.runUnscoped(() => configStore.unset(name, { persist: true }));
@@ -281,33 +276,176 @@ Module(
   }
 );
 
+const BUTTONS_WARNING =
+  "_*⚠️ Interactive buttons are unofficial.*_\n_WhatsApp may stop showing them at any time, or restrict accounts that use them. Use at your own risk._\n\n_If buttons stop showing, type_ `{p}settings BUTTONS off` _to go back to normal mode._";
+
+const capitalize = (v) => String(v).charAt(0).toUpperCase() + String(v).slice(1);
+
+function rawValue(key) {
+  const v = config[key];
+  return Array.isArray(v) ? v.join(",") : String(v ?? "");
+}
+
+function valueLabel(s) {
+  if (s.kind === "bool") return catalog.isOn(config[s.key]) ? "ON ✅" : "OFF ❌";
+  const v = rawValue(s.key);
+  if (s.kind === "enum") return capitalize(v && v !== "false" ? v : s.options[0].value);
+  return v === "" || v === "false" ? "not set" : v;
+}
+
+function choicesOf(s) {
+  if (s.kind === "bool") {
+    return [
+      { label: "ON", button: "✅ On", value: "true", word: "on" },
+      { label: "OFF", button: "❌ Off", value: s.offValue ?? "false", word: "off" },
+    ];
+  }
+  if (s.kind === "enum") {
+    return s.options.map((o) => ({ label: capitalize(o.value), button: capitalize(o.value), value: o.value, word: o.value, also: o.also }));
+  }
+  return [];
+}
+
+const backButton = () => ({ text: "⬅️ Back", id: ui.cmd("settings") });
+
+function menuText() {
+  const p = helpPrefix();
+  let n = 0;
+  let text = `*_Settings configuration menu_*\n_Reply with a number, or use_ \`${p}settings <name>\`\n`;
+  for (const cat of catalog.settingsCatalog()) {
+    text += `\n*${cat.name}*\n`;
+    for (const item of cat.items) {
+      n += 1;
+      text += `_${n}. ${item.title}_ · ${valueLabel(item)}\n`;
+    }
+  }
+  return text.trim();
+}
+
+async function showMenu(message) {
+  return await message.sendList({
+    text: menuText(),
+    header: "⚙️ Bot settings",
+    body: "_Tap the button below and pick a setting to change it._",
+    footer: `${config.BOT_NAME} · v${config.VERSION}`,
+    button: "Open settings",
+    sections: catalog.settingsCatalog().map((cat) => ({
+      title: cat.name,
+      rows: cat.items.map((item) => ({
+        title: item.title,
+        description: valueLabel(item),
+        id: ui.cmd("settings", item.key),
+      })),
+    })),
+  });
+}
+
+function detailText(s) {
+  const p = helpPrefix();
+  let text = `*_${s.title}_* (${s.key})\n`;
+  if (s.desc) text += `_${s.desc}_\n`;
+  text += `_Now:_ ${valueLabel(s)}\n`;
+  const choices = choicesOf(s);
+  if (choices.length) {
+    text += "\n" + choices.map((c, i) => `${i + 1}. ${c.label}`).join("\n");
+  } else if (s.via) {
+    text += `\n_Change it with_ \`${p}${s.via}\``;
+  } else {
+    text += `\n_Change it with_ \`${p}setvar ${s.key}=value\``;
+  }
+  return text + restartNote(s.key);
+}
+
+async function showSetting(message, s) {
+  const text = detailText(s);
+  const choices = choicesOf(s);
+  const opts = { text, header: s.title, body: text.replace(/^\*_.+?_\* \([A-Z_]+\)\n/, ""), footer: s.category };
+  if (s.via) {
+    return await message.sendButtons({ ...opts, buttons: [{ text: "ℹ️ How to change", id: ui.cmd(s.via) }, backButton()] });
+  }
+  if (!choices.length) {
+    const current = rawValue(s.key);
+    const copy = `${helpPrefix()}setvar ${s.key}=${current.length <= 200 && current !== "false" ? current : ""}`;
+    return await message.sendButtons({ ...opts, buttons: [{ text: "✏️ Copy command", copy }, backButton()] });
+  }
+  const choiceButton = (c) => ({ text: c.button, id: ui.cmd("settings", s.key, c.word) });
+  if (choices.length <= 2) {
+    return await message.sendButtons({ ...opts, buttons: [...choices.map(choiceButton), backButton()] });
+  }
+  return await message.sendList({
+    ...opts,
+    button: "Choose",
+    sections: [{ title: s.title, rows: choices.map((c) => ({ title: c.button, id: choiceButton(c).id })) }],
+    extraButtons: [backButton()],
+  });
+}
+
+async function confirm(message, text) {
+  return await message.sendButtons({ text, buttons: [{ text: "⬅️ Back to settings", id: ui.cmd("settings") }] });
+}
+
+async function applyValue(message, s, value, also) {
+  const turningButtonsOn = s.key === "BUTTONS" && catalog.isOn(value) && !ui.enabled();
+  if (turningButtonsOn) await message.sendReply(BUTTONS_WARNING.replace("{p}", helpPrefix()));
+  await setVar(s.key, value);
+  for (const [k, v] of Object.entries(also || {})) await setVar(k, v);
+  if (turningButtonsOn) {
+    return await message.sendButtons({
+      text: `_Buttons enabled ✅_\n_If you don't see buttons on this message, type_ \`${helpPrefix()}settings BUTTONS off\``,
+      body: "_Buttons enabled ✅_\n_If you can see the buttons below, they work on your WhatsApp._",
+      footer: "Use at your own risk",
+      buttons: [
+        { text: "⚙️ Settings", id: ui.cmd("settings") },
+        { text: "📜 Menu", id: ui.cmd("menu") },
+      ],
+    });
+  }
+  return await confirm(message, `_${s.title} set to ${valueLabel(s)}_${restartNote(s.key)}`);
+}
+
+// resolves typed input ("on", "public", any text) against the setting's kind
+async function setFromInput(message, s, input) {
+  const choices = choicesOf(s);
+  if (choices.length) {
+    const word = input.toLowerCase();
+    let choice = choices.find((c) => c.word === word);
+    if (!choice && s.kind === "bool") {
+      if (["true", "1", "yes", "enable"].includes(word)) choice = choices[0];
+      if (["false", "0", "no", "disable"].includes(word)) choice = choices[1];
+    }
+    if (!choice) {
+      return await message.sendReply(`_Invalid value for ${s.title}. Use: ${choices.map((c) => c.word).join(" / ")}_`);
+    }
+    return await applyValue(message, s, choice.value, choice.also);
+  }
+  if (s.via) {
+    return await message.sendReply(`_Use_ \`${helpPrefix()}${s.via}\` _to change ${s.title.toLowerCase()}._`);
+  }
+  if (s.kind === "number" && !/^\d+$/.test(input)) {
+    return await message.sendReply(`_${s.title} must be a number_`);
+  }
+  return await applyValue(message, s, input);
+}
+
 Module(
   {
     pattern: "settings ?(.*)",
     fromMe: true,
-    desc: "Bot settings to enable extra options related to WhatsApp bot functionality.",
+    desc: "View and change every bot setting. Use .settings <name> [value]",
+    usage: ".settings | .settings ALWAYS_ONLINE on",
     use: "owner",
   },
   async (message, match) => {
-    let configs = settingsMenu;
-    if (match[1]) {
-      const selectedOption = parseInt(match[1]);
-      if (
-        !isNaN(selectedOption) &&
-        selectedOption > 0 &&
-        selectedOption <= configs.length
-      ) {
-        const setting = configs[selectedOption - 1];
-        let msg = `_*${setting.title}*_\n_Now:_ ${config[setting.env_var] ? "ON ✅" : "OFF ❌"}\n\n1. ON\n2. OFF`;
-        return await message.sendReply(msg);
-      }
+    const input = match[1]?.trim();
+    if (!input) return await showMenu(message);
+    const [first, ...rest] = input.split(/\s+/);
+    const all = catalog.allSettings();
+    const s = /^\d+$/.test(first) ? all[parseInt(first) - 1] : catalog.settingFor(first);
+    if (!s) {
+      return await message.sendReply(`_Unknown setting '${first}'. Use_ \`${helpPrefix()}settings\` _to see all._`);
     }
-    let msg =
-      "*_Settings configuration menu_*\n\n_Select an option by number:_\n\n";
-    configs.forEach((e, index) => {
-      msg += `_${index + 1}. ${e.title}_ ${config[e.env_var] ? "✅" : "❌"}\n`;
-    });
-    return await message.sendReply(msg);
+    if (!rest.length) return await showSetting(message, s);
+    return await setFromInput(message, s, input.slice(first.length).trim());
   }
 );
 
@@ -325,9 +463,16 @@ Module(
     ) {
       return await setVar("MODE", match[1], message);
     } else {
-      return await message.sendReply(
-        `_*Mode manager*_\n_Current mode: ${config.MODE}_\n_Use \`${helpPrefix()}mode public|private\`_`
-      );
+      const text = `_*Mode manager*_\n_Current mode: ${config.MODE}_\n_Use \`${helpPrefix()}mode public|private\`_`;
+      return await message.sendButtons({
+        text,
+        header: "Mode manager",
+        body: `_Current mode: *${config.MODE}*_\n_Public: everyone can use commands. Private: only you and sudo._`,
+        buttons: [
+          { text: "🌍 Public", id: ui.cmd("mode", "public") },
+          { text: "🔒 Private", id: ui.cmd("mode", "private") },
+        ],
+      });
     }
   }
 );
@@ -414,9 +559,7 @@ Module(
     var m = message;
     let targetLid;
 
-    // determine target based on context
     if (m.isGroup) {
-      // in groups: check mention first, then reply
       if (m.mention && m.mention.length > 0) {
         targetLid = m.mention[0];
       } else if (m.reply_message) {
@@ -425,14 +568,12 @@ Module(
         return await m.sendReply("_Need reply or mention in groups_");
       }
     } else {
-      // in DM: use sender
       targetLid = m.sender;
     }
 
     if (!targetLid) return await m.sendReply("_Could not determine target_");
 
     try {
-      // get current SUDO_MAP
       let sudoMap = [];
       if (config.SUDO_MAP) {
         try {
@@ -443,16 +584,13 @@ Module(
         }
       }
 
-      // check if already sudo
       if (sudoMap.includes(targetLid)) {
         return await m.sendReply("_User is already a sudo_");
       }
 
-      // add to sudo map
       sudoMap.push(targetLid);
       await setVar("SUDO_MAP", JSON.stringify(sudoMap));
 
-      // format for display
       const displayId = targetLid.split("@")[0];
 
       await m.sendMessage(`_Added @${displayId} as sudo_`, "text", {
@@ -508,9 +646,7 @@ Module(
   async (m, mm) => {
     let targetLid;
 
-    // determine target based on context
     if (m.isGroup) {
-      // in groups: check mention first, then reply
       if (m.mention && m.mention.length > 0) {
         targetLid = m.mention[0];
       } else if (m.reply_message) {
@@ -519,14 +655,12 @@ Module(
         return await m.sendReply("_Need reply or mention in groups_");
       }
     } else {
-      // in DM: use sender
       targetLid = m.sender;
     }
 
     if (!targetLid) return await m.sendReply("_Could not determine target_");
 
     try {
-      // get current SUDO_MAP
       let sudoMap = [];
       if (config.SUDO_MAP) {
         try {
@@ -537,16 +671,13 @@ Module(
         }
       }
 
-      // check if user is sudo
       if (!sudoMap.includes(targetLid)) {
         return await m.sendReply("_User is not a sudo_");
       }
 
-      // remove from sudo map
       sudoMap = sudoMap.filter((lid) => lid !== targetLid);
       await setVar("SUDO_MAP", JSON.stringify(sudoMap));
 
-      // format for display
       const displayId = targetLid.split("@")[0];
 
       await m.sendMessage(`_Removed @${displayId} from sudo!_`, "text", {
@@ -569,7 +700,6 @@ const listOf = (raw) =>
         .filter((x) => x && x !== "null")
     : [];
 
-// `.toggle filter <trigger> [scope]`, which is also what `.togglefilter ...` arrives as
 async function toggleFilter(message, input) {
   if (!message.fromOwner) {
     if (!message.isGroup || !(await groupAdminGuard(message))) return;
@@ -618,7 +748,7 @@ Module(
     const input = match[1]?.trim();
     const filterArgs = input?.match(/^filter(?:\s+(.*))?$/is);
     if (filterArgs) return await toggleFilter(message, filterArgs[1]?.trim());
-    // the registration is open to everyone so admins reach the filter branch above
+    // open to everyone so admins reach the filter branch above
     if (!message.fromOwner) return;
     if (!input) {
       return await message.sendReply(
@@ -657,46 +787,32 @@ Module(
   }
 );
 
-// the replies to the .settings menu. true when the message was one of them
+const settingByTitle = (title) =>
+  catalog.allSettings().find((s) => s.title.toLowerCase() === String(title || "").trim().toLowerCase()) || null;
+
+// number replies to a text-mode menu or detail card; titles are matched first so
+// menus sent by an older version (different order) still resolve correctly
 async function handleSettingsReply(message) {
   if (!message.fromOwner) return false;
-  const configs = settingsMenu;
-  const sMatch = message.message?.match(/^\d+$/);
-  const settingsMatch =
-    sMatch &&
-    message.reply_message?.text &&
-    message.reply_message.text
-      .toLowerCase()
-      .includes("settings configuration menu") &&
-    message.quoted.key.fromMe;
-  if (settingsMatch) {
-    const optionNumber = parseInt(sMatch[0]);
-    if (optionNumber > 0 && optionNumber <= configs.length) {
-      const setting = configs[optionNumber - 1];
-      await message.sendReply(
-        `*_${setting.title}_*\n_Now:_ ${config[setting.env_var] ? "ON ✅" : "OFF ❌"}\n1. ON\n2. OFF`
-      );
-      return true;
-    }
-  } else if (
-    message.message?.match(/^(1|2)$/) &&
-    message.reply_message?.text?.includes("1. ON") &&
-    message.quoted.key.fromMe
-  ) {
-    const quotedMsg = message.reply_message.message;
-    const option = parseInt(message.message);
-    for (const setting of configs) {
-      if (quotedMsg.includes(setting.title)) {
-        const value = option === 1 ? "true" : "false";
-        await setVar(setting.env_var, value);
-        await message.sendReply(
-          `${setting.title} set to ${value}${restartNote(setting.env_var)}`
-        );
-        return true;
-      }
-    }
+  const n = message.message?.match(/^\d+$/)?.[0];
+  const quoted = message.reply_message?.text;
+  if (!n || !quoted || !message.quoted?.key?.fromMe) return false;
+  const num = parseInt(n);
+  if (quoted.toLowerCase().includes("settings configuration menu")) {
+    const line = quoted.match(new RegExp(`^_${num}\\. (.+?)_`, "m"))?.[1];
+    const s = settingByTitle(line) || catalog.allSettings()[num - 1];
+    if (!s) return false;
+    await showSetting(message, s);
+    return true;
   }
-  return false;
+  const head = quoted.match(/^\*_(.+?)_\*(?: \(([A-Z_]+)\))?/m);
+  if (!head || !/^1\. /m.test(quoted)) return false;
+  const s = (head[2] && catalog.settingFor(head[2])) || settingByTitle(head[1]);
+  if (!s) return false;
+  const choice = choicesOf(s)[num - 1];
+  if (!choice) return false;
+  await applyValue(message, s, choice.value, choice.also);
+  return true;
 }
 
 module.exports = {
